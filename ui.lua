@@ -1,11 +1,12 @@
 -- ui.lua
+-- ui.lua
 local Players = game:GetService('Players')
 local StarterGui = game:GetService('StarterGui')
 local UserInputService = game:GetService('UserInputService')
 
--- Expect a sibling table injected by bootstrap: script.Parent._deps.utils
-local utils = require(script:FindFirstAncestorWhichIsA('Folder'))._deps.utils
-local hud = require(script.Parent.hud)
+-- Use sibling table injected by bootstrap
+local utils     = require(script.Parent._deps.utils)
+local hud       = require(script.Parent.hud)
 local constants = require(script.Parent.constants)
 
 local M = {}
