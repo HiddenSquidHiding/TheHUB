@@ -1,5 +1,3 @@
--- init.lua
--- Replace the BASE to your repo's raw path (keep trailing slash)
 local BASE = 'https://raw.githubusercontent.com/HiddenSquidHiding/TheHUB/main/'
 
 local function fetch(path)
@@ -39,9 +37,24 @@ local function loadWithSiblings(path, siblings)
   local src = fetch(path)
   local chunk = loadstring(src, '='..path)
   assert(chunk)
-  local env = getfenv()
+
+  local baseEnv = getfenv()
   local fakeScript = { Parent = siblings }
-  local sandbox = setmetatable({ script = fakeScript }, {__index = env})
+
+  -- 🔧 shim require: return the table if a table is passed (our sibling modules)
+  local function shimRequire(target)
+    if type(target) == 'table' then
+      return target
+    end
+    -- If someone ever passes an actual ModuleScript Instance, fall back to Roblox require
+    return baseEnv.require(target)
+  end
+
+  local sandbox = setmetatable({
+    script  = fakeScript,
+    require = shimRequire,
+  }, { __index = baseEnv })
+
   sandbox._G = _G
   setfenv(chunk, sandbox)
   return chunk()
@@ -65,7 +78,5 @@ siblings.crates = crates
 siblings.merchants = merchants
 siblings.farm = farm
 siblings.ui = ui
-
--- Run the app
 local app = loadWithSiblings('app.lua', siblings)
 app.start()
