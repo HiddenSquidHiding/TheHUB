@@ -109,3 +109,50 @@ function M.runAutoFarm(getEnabled, setTargetText)
     local enemies = refreshEnemyList(); if #enemies==0 then setTargetText('Current Target: None'); task.wait(0.5); continue end
     for _, enemy in ipairs(enemies) do
       if not getEnabled() then setTargetText('Current Target: None'); return end
+      if not enemy or not enemy.Parent or Players:GetPlayerFromCharacter(enemy) then continue end
+      local humanoid = enemy:FindFirstChildOfClass('Humanoid'); if not humanoid or humanoid.Health<=0 then continue end
+      local playerHumanoid = character:FindFirstChildOfClass('Humanoid'); local playerHealth = playerHumanoid.Health
+      local playerAttackPower = 100; if GetPlayerData then local ok2, stats = pcall(function() return GetPlayerData:InvokeServer() end); if ok2 and type(stats)=='table' then playerAttackPower = stats.Damage or stats.AttackPower or stats.Power or playerAttackPower end end
+      local mobHealth = humanoid.Health; local mobAttackPower = 10
+      local pivotCF = enemy:GetPivot(); if not utils.isValidCFrame(pivotCF) then continue end
+      local estimatedHitsToKill = math.ceil(mobHealth / playerAttackPower)
+      local estimatedDamageReceived = estimatedHitsToKill * mobAttackPower
+      local safetyThreshold = playerHealth * 0.8
+      if estimatedDamageReceived >= safetyThreshold then continue end
+      local tempTargetCF = pivotCF * CFrame.new(0,20,0)
+      local teleported=false
+      for i=1,3 do
+        local ok = pcall(function()
+          local p=Players.LocalPlayer
+          if p.Character and p.Character:FindFirstChild('HumanoidRootPart') and p.Character.Humanoid.Health>0 then
+            p.Character.HumanoidRootPart.CFrame = tempTargetCF; task.wait(0.1)
+          end
+        end)
+        if ok then teleported=true; break end
+        task.wait(1)
+      end
+      if not teleported then continue end
+      task.wait(0.5)
+      local targetPart = utils.findBasePart(enemy); if not targetPart then continue end
+      local targetCF = targetPart.CFrame * CFrame.new(0,20,0); if not utils.isValidCFrame(targetCF) then continue end
+      local bodyPos = Instance.new('BodyPosition'); bodyPos.MaxForce=Vector3.new(math.huge,math.huge,math.huge); bodyPos.Position=targetCF.Position; bodyPos.D=1000; bodyPos.P=10000; bodyPos.Parent = Players.LocalPlayer.Character.HumanoidRootPart
+      local hc = humanoid.HealthChanged:Connect(function(h) setTargetText(('Current Target: %s (Health: %d)'):format(enemy.Name, h)) end)
+      local start=tick(); local isWeather = table.find(data.weatherEventModels, enemy.Name:lower()) ~= nil
+      while getEnabled() and enemy.Parent and humanoid and humanoid.Health>0 do
+        if isWeather and (tick()-start)>30 then break end
+        local ok = pcall(function()
+          local currentTargetPart = utils.findBasePart(enemy)
+          if currentTargetPart then targetCF = currentTargetPart.CFrame * CFrame.new(0,20,0); if not utils.isValidCFrame(targetCF) then return end; bodyPos.Position = targetCF.Position else return end
+          local hrp = enemy:FindFirstChild('HumanoidRootPart'); if hrp then M.autoAttackRemote:InvokeServer(hrp.CFrame) end
+        end)
+        if not ok then break end
+        task.wait(0.1)
+      end
+      if bodyPos then bodyPos:Destroy() end; if hc then hc:Disconnect() end
+      setTargetText('Current Target: None')
+    end
+    task.wait(0.5)
+  end
+end
+
+return M
