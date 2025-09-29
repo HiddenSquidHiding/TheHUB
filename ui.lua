@@ -1,10 +1,8 @@
 -- ui.lua
--- ui.lua
 local Players = game:GetService('Players')
 local StarterGui = game:GetService('StarterGui')
 local UserInputService = game:GetService('UserInputService')
 
--- Use sibling table injected by bootstrap
 local utils     = require(script.Parent._deps.utils)
 local hud       = require(script.Parent.hud)
 local constants = require(script.Parent.constants)
@@ -49,9 +47,12 @@ function M.build()
   ui.AutoFarmToggle = utils.new('TextButton', {Size=UDim2.new(1,-20,0,30), Position=UDim2.new(0,10,0,250), BackgroundColor3=constants.COLOR_BTN, TextColor3=constants.COLOR_WHITE, Text='Auto-Farm: OFF', TextSize=14, Font=Enum.Font.SourceSans}, ui.MainTabFrame)
   ui.CurrentTargetLabel = utils.new('TextLabel', {Size=UDim2.new(1,-20,0,30), Position=UDim2.new(0,10,0,290), BackgroundColor3=constants.COLOR_BG_MED, TextColor3=constants.COLOR_WHITE, Text='Current Target: None', TextSize=14, Font=Enum.Font.SourceSans}, ui.MainTabFrame)
 
+  -- Options tab toggles
   ui.ToggleMerchant1Button = utils.new('TextButton', {Size=UDim2.new(1,-20,0,30), Position=UDim2.new(0,10,0,10), BackgroundColor3=constants.COLOR_BTN, TextColor3=constants.COLOR_WHITE, Text='Auto Buy Mythics (Chicleteiramania): OFF', TextSize=14, Font=Enum.Font.SourceSans}, ui.LoggingTabFrame)
   ui.ToggleMerchant2Button = utils.new('TextButton', {Size=UDim2.new(1,-20,0,30), Position=UDim2.new(0,10,0,50), BackgroundColor3=constants.COLOR_BTN, TextColor3=constants.COLOR_WHITE, Text='Auto Buy Mythics (Bombardino Sewer): OFF', TextSize=14, Font=Enum.Font.SourceSans}, ui.LoggingTabFrame)
   ui.ToggleAutoCratesButton = utils.new('TextButton', {Size=UDim2.new(1,-20,0,30), Position=UDim2.new(0,10,0,90), BackgroundColor3=constants.COLOR_BTN, TextColor3=constants.COLOR_WHITE, Text='Auto Open Crates: OFF', TextSize=14, Font=Enum.Font.SourceSans}, ui.LoggingTabFrame)
+  -- NEW: Anti-AFK toggle
+  ui.ToggleAntiAFKButton  = utils.new('TextButton', {Size=UDim2.new(1,-20,0,30), Position=UDim2.new(0,10,0,130), BackgroundColor3=constants.COLOR_BTN, TextColor3=constants.COLOR_WHITE, Text='Anti-AFK: OFF', TextSize=14, Font=Enum.Font.SourceSans}, ui.LoggingTabFrame)
 
   -- Dragging
   do
