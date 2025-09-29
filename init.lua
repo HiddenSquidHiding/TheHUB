@@ -1,5 +1,5 @@
 -- init.lua
-local BASE = 'https://raw.githubusercontent.com/USER/REPO/BRANCH/woodzhub/'
+local BASE = 'https://raw.githubusercontent.com/HiddenSquidHiding/TheHUB/main/'
 
 local function fetch(path)
   local ok, res = pcall(function() return game:HttpGet(BASE .. path) end)
