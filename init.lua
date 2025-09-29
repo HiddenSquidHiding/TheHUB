@@ -1,4 +1,5 @@
-local BASE = 'https://raw.githubusercontent.com/HiddenSquidHiding/TheHUB/main/'
+-- init.lua
+local BASE = 'https://raw.githubusercontent.com/USER/REPO/BRANCH/woodzhub/'
 
 local function fetch(path)
   local ok, res = pcall(function() return game:HttpGet(BASE .. path) end)
@@ -6,7 +7,6 @@ local function fetch(path)
   return res
 end
 
--- Lightweight module cache & loader
 local CACHE = {}
 local function use(path)
   if CACHE[path] then return CACHE[path] end
@@ -20,55 +20,42 @@ local function use(path)
   return mod
 end
 
--- Provide a tiny dependency anchor so modules can `require(script.Parent._deps.utils)`
 local utilsSrc = fetch('utils.lua')
 local utils = (loadstring(utilsSrc, '=utils.lua')())
 
--- Emulate a folder with children layout via a table
 local _deps = { utils = utils }
 
--- Load base modules
 local constants     = use('constants.lua')
 local data_monsters = use('data_monsters.lua')
 local hud           = use('hud.lua')
 
--- Helper to load modules that expect sibling-style requires (`script.Parent.X`)
 local function loadWithSiblings(path, siblings)
   local src = fetch(path)
   local chunk = loadstring(src, '='..path)
   assert(chunk)
-
   local baseEnv = getfenv()
   local fakeScript = { Parent = siblings }
-
-  -- 🔧 shim require: return the table if a table is passed (our sibling modules)
   local function shimRequire(target)
-    if type(target) == 'table' then
-      return target
-    end
-    -- If someone ever passes an actual ModuleScript Instance, fall back to Roblox require
+    if type(target) == 'table' then return target end
     return baseEnv.require(target)
   end
-
-  local sandbox = setmetatable({
-    script  = fakeScript,
-    require = shimRequire,
-  }, { __index = baseEnv })
-
+  local sandbox = setmetatable({ script = fakeScript, require = shimRequire }, { __index = baseEnv })
   sandbox._G = _G
   setfenv(chunk, sandbox)
   return chunk()
 end
 
--- Build a sibling table visible as `script.Parent`
 local siblings = {
   constants = constants,
   data_monsters = data_monsters,
   hud = hud,
-  _deps = _deps, -- exposes utils to siblings
+  _deps = _deps,
 }
 
--- Load the rest
+-- NEW: load anti_afk before app/farm so require() works
+local anti_afk = loadWithSiblings('anti_afk.lua', siblings)
+siblings.anti_afk = anti_afk
+
 local crates    = loadWithSiblings('crates.lua', siblings)
 local merchants = loadWithSiblings('merchants.lua', siblings)
 local farm      = loadWithSiblings('farm.lua', siblings)
@@ -78,5 +65,6 @@ siblings.crates = crates
 siblings.merchants = merchants
 siblings.farm = farm
 siblings.ui = ui
+
 local app = loadWithSiblings('app.lua', siblings)
 app.start()
