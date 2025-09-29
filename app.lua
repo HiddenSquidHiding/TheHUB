@@ -1,6 +1,5 @@
 -- app.lua
 local Players = game:GetService('Players')
-local StarterGui = game:GetService('StarterGui')
 
 local constants = require(script.Parent.constants)
 local utils     = require(script.Parent._deps.utils)
@@ -9,6 +8,7 @@ local farm      = require(script.Parent.farm)
 local crates    = require(script.Parent.crates)
 local merchants = require(script.Parent.merchants)
 local hud       = require(script.Parent.hud)
+local antiAFK   = require(script.Parent.anti_afk) -- << NEW
 
 local App = {}
 
@@ -22,6 +22,7 @@ function App.start()
   local autoBuyM1Enabled=false
   local autoBuyM2Enabled=false
   local autoOpenCratesEnabled=false
+  local antiAfkEnabled = false  -- controlled by button
 
   local function ensureTopDisplayOrder()
     local ScreenGui = ui.ScreenGui
@@ -64,6 +65,7 @@ function App.start()
   utils.track(ui.MaximizeButton.MouseButton1Click:Connect(maximizeFrame))
   utils.track(ui.CloseButton.MouseButton1Click:Connect(function()
     autoFarmEnabled=false; autoBuyM1Enabled=false; autoBuyM2Enabled=false; autoOpenCratesEnabled=false
+    if antiAfkEnabled then antiAFK.disable(); antiAfkEnabled=false end
     ui.ScreenGui:Destroy()
   end))
 
@@ -83,7 +85,7 @@ function App.start()
   utils.track(ui.MainTabButton.MouseButton1Click:Connect(switchToMainTab))
   utils.track(ui.LoggingTabButton.MouseButton1Click:Connect(switchToLoggingTab))
 
-  -- Model list
+  -- Model list + search (unchanged)
   local function updateDropdown()
     for _, ch in ipairs(ui.ModelScrollFrame:GetChildren()) do if ch:IsA('TextButton') then ch:Destroy() end end
     local count=0
@@ -130,7 +132,7 @@ function App.start()
     ui.AutoFarmToggle.BackgroundColor3 = autoFarmEnabled and constants.COLOR_BTN_ACTIVE or constants.COLOR_BTN
     if autoFarmEnabled then
       farm.setupAutoAttackRemote()
-      farm.preventAFK(function() return autoFarmEnabled end)
+      -- Anti-AFK is handled independently via its toggle; farm will call anti.ensure()
       task.spawn(function() farm.runAutoFarm(function() return autoFarmEnabled end, function(t) ui.CurrentTargetLabel.Text = t end) end)
     else
       ui.CurrentTargetLabel.Text = 'Current Target: None'
@@ -160,7 +162,15 @@ function App.start()
     if autoOpenCratesEnabled then crates.refreshCrateInventory(true); task.spawn(function() crates.autoOpenCratesEnabledLoop(function() return autoOpenCratesEnabled end) end) end
   end))
 
-  utils.notify('🌲 WoodzHUB', 'Welcome to WoodzHUB (clean build)! Weather-priority farming, folder-wide spawn scan, dual merchants, and Auto Crates with reward sniffer.', 6.5)
+  -- NEW: Anti-AFK toggle wiring
+  utils.track(ui.ToggleAntiAFKButton.MouseButton1Click:Connect(function()
+    antiAfkEnabled = not antiAfkEnabled
+    if antiAfkEnabled then antiAFK.enable() else antiAFK.disable() end
+    ui.ToggleAntiAFKButton.Text = 'Anti-AFK: '..(antiAfkEnabled and 'ON' or 'OFF')
+    ui.ToggleAntiAFKButton.BackgroundColor3 = antiAfkEnabled and constants.COLOR_BTN_ACTIVE or constants.COLOR_BTN
+  end))
+
+  utils.notify('🌲 WoodzHUB', 'Anti-AFK split into its own module with a GUI toggle in Options.', 4.5)
 end
 
 return App
