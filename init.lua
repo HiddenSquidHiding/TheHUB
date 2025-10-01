@@ -1,6 +1,6 @@
 -- init.lua
 -- 👉 Adjust BASE to your repo layout: with or without /woodzhub/ at the end.
-local BASE = 'https://raw.githubusercontent.com/HiddenSquidHiding/TheHUB/main/woodzhub/'
+local BASE = 'https://raw.githubusercontent.com/HiddenSquidHiding/TheHUB/main/'
 
 -- Fetch helper
 local function fetch(path)
