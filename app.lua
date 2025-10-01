@@ -25,7 +25,7 @@ end
 
 function app.start()
   ------------------------------------------------------------------
-  -- AutoFarm
+  -- Auto-Farm
   ------------------------------------------------------------------
   utils.track(ui.AutoFarmToggle.MouseButton1Click:Connect(function()
     autoFarmEnabled = not autoFarmEnabled
