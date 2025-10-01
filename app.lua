@@ -1,5 +1,15 @@
 -- app.lua
-local utils      = require(script.Parent._deps.utils)
+-- Top-level wiring for UI <-> features
+
+-- 🔧 Safer access to injected utils (no require(nil))
+local function getUtils()
+  local p = script and script.Parent
+  if p and p._deps and p._deps.utils then return p._deps.utils end
+  if rawget(getfenv(), "__WOODZ_UTILS") then return __WOODZ_UTILS end
+  error("[app.lua] utils missing; ensure init.lua injects siblings._deps.utils before loading app.lua")
+end
+
+local utils      = getUtils()
 local constants  = require(script.Parent.constants)
 local ui         = require(script.Parent.ui)
 local farm       = require(script.Parent.farm)
@@ -99,7 +109,7 @@ function app.start()
     ui.ToggleAutoCratesButton.BackgroundColor3 = autoOpenCratesEnabled and constants.COLOR_BTN_ACTIVE or constants.COLOR_BTN
     if autoOpenCratesEnabled then
       crates.refreshCrateInventory(true)
-      notifyToggle('Crates', true, (' (1 every '..tostring(constants.crateOpenDelay)..'s)'))
+      notifyToggle('Crates', true, (' (1 every '..tostring(constants.crateOpenDelay or 1)..'s)'))
       task.spawn(function() crates.autoOpenCratesEnabledLoop(function() return autoOpenCratesEnabled end) end)
     else
       notifyToggle('Crates', false)
