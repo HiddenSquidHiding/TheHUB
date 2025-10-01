@@ -141,7 +141,7 @@ local function listEnemies()
   return enemies
 end
 
--- Utils reused locally -----------------------------------------------------
+-- Locals -------------------------------------------------------------------
 local function isValidCFrame(cf)
   if not cf then return false end
   local p = cf.Position
@@ -178,7 +178,7 @@ function M.setupAutoAttackRemote()
   end
 end
 
--- Main auto-farm loop (no floor pinning; just hover/teleport) --------------
+-- Main auto-farm loop (no floor pinning; hover/teleport + health updates) --
 function M.runAutoFarm(getEnabled, setTargetText)
   if not autoAttackRemote then return end
   local player = Players.LocalPlayer
@@ -225,12 +225,19 @@ function M.runAutoFarm(getEnabled, setTargetText)
       hoverBP.Name = "WoodzHub_AttackHover"
       hoverBP.Parent = character.HumanoidRootPart
 
-      local alive = true
+      -- 🔁 Live health updates
+      local hcConn
+      if setTargetText then
+        hcConn = humanoid.HealthChanged:Connect(function(h)
+          setTargetText(('Current Target: %s (Health: %d)'):format(enemy.Name, math.floor(h)))
+        end)
+      end
+
       while getEnabled() and enemy.Parent and humanoid and humanoid.Health > 0 do
         local partNow = findBasePart(enemy)
-        if not partNow then alive = false break end
+        if not partNow then break end
         local cf = partNow.CFrame * CFrame.new(0, 20, 0)
-        if not isValidCFrame(cf) then alive = false break end
+        if not isValidCFrame(cf) then break end
         hoverBP.Position = cf.Position
 
         local hrp = enemy:FindFirstChild('HumanoidRootPart')
@@ -240,7 +247,9 @@ function M.runAutoFarm(getEnabled, setTargetText)
         task.wait(0.1)
       end
 
+      if hcConn then hcConn:Disconnect() end
       if hoverBP then hoverBP:Destroy() end
+
       if setTargetText then setTargetText('Current Target: None') end
       if not getEnabled() then return end
     end
