@@ -20,11 +20,11 @@ local antiAFK    = require(script.Parent.anti_afk)
 local app = {}
 
 -- State flags
-local autoFarmEnabled=false
-local autoBuyM1Enabled=false
-local autoBuyM2Enabled=false
-local autoOpenCratesEnabled=false
-local antiAfkEnabled=false
+local autoFarmEnabled       = false
+local autoBuyM1Enabled      = false
+local autoBuyM2Enabled      = false
+local autoOpenCratesEnabled = false
+local antiAfkEnabled        = false
 
 -- Notify helper
 local function notifyToggle(name, on, extra)
@@ -33,50 +33,88 @@ local function notifyToggle(name, on, extra)
   utils.notify('🌲 ' .. name, msg, 3.5)
 end
 
+-- Quick guard so we fail loudly if a control is missing
+local function need(ctrl, name)
+  if not ctrl then
+    utils.notify('🌲 WoodzHUB Error', ("Missing UI control: %s (check ui.build)"):format(name), 6)
+    error(("[app.lua] Missing UI control: %s"):format(name))
+  end
+  return ctrl
+end
+
 function app.start()
+  ------------------------------------------------------------------
+  -- 1) Build UI first, then wire handlers
+  ------------------------------------------------------------------
+  local UI = ui.build()
+  -- Validate we have the controls we expect
+  need(UI.ScreenGui,            "ScreenGui")
+  need(UI.AutoFarmToggle,       "AutoFarmToggle")
+  need(UI.CurrentTargetLabel,   "CurrentTargetLabel")
+  need(UI.ToggleAntiAFKButton,  "ToggleAntiAFKButton")
+  need(UI.ToggleMerchant1Button,"ToggleMerchant1Button")
+  need(UI.ToggleMerchant2Button,"ToggleMerchant2Button")
+  need(UI.ToggleAutoCratesButton,"ToggleAutoCratesButton")
+  need(UI.CloseButton,          "CloseButton")
+
   ------------------------------------------------------------------
   -- Auto-Farm
   ------------------------------------------------------------------
-  utils.track(ui.AutoFarmToggle.MouseButton1Click:Connect(function()
+  utils.track(UI.AutoFarmToggle.MouseButton1Click:Connect(function()
     autoFarmEnabled = not autoFarmEnabled
-    ui.AutoFarmToggle.Text = 'Auto-Farm: '..(autoFarmEnabled and 'ON' or 'OFF')
-    ui.AutoFarmToggle.BackgroundColor3 = autoFarmEnabled and constants.COLOR_BTN_ACTIVE or constants.COLOR_BTN
+    UI.AutoFarmToggle.Text = 'Auto-Farm: '..(autoFarmEnabled and 'ON' or 'OFF')
+    UI.AutoFarmToggle.BackgroundColor3 = autoFarmEnabled and constants.COLOR_BTN_ACTIVE or constants.COLOR_BTN
     if autoFarmEnabled then
       farm.setupAutoAttackRemote()
-      local sel = farm.getSelected()
-      notifyToggle('Auto-Farm', true, sel and #sel>0 and (' for: '..table.concat(sel, ', ')) or '')
+      local sel = (farm.getSelected and farm.getSelected()) or nil
+      notifyToggle('Auto-Farm', true, (sel and #sel>0) and (' for: '..table.concat(sel, ', ')) or '')
       task.spawn(function()
-        farm.runAutoFarm(function() return autoFarmEnabled end, function(t) ui.CurrentTargetLabel.Text = t end)
+        if farm.runAutoFarm then
+          farm.runAutoFarm(function() return autoFarmEnabled end, function(t) UI.CurrentTargetLabel.Text = t end)
+        else
+          -- Legacy API support
+          if farm.setTargetLabel then farm.setTargetLabel(UI.CurrentTargetLabel) end
+          farm.toggleFarm(true, game.Players.LocalPlayer, sel or {}, (require(script.Parent.data_monsters).weatherEventModels or {}), (require(script.Parent.data_monsters).toSahurModels or {}))
+        end
       end)
     else
-      ui.CurrentTargetLabel.Text = 'Current Target: None'
+      UI.CurrentTargetLabel.Text = 'Current Target: None'
       notifyToggle('Auto-Farm', false)
+      -- If using legacy API
+      if farm.toggleFarm then
+        local sel = (farm.getSelected and farm.getSelected()) or {}
+        farm.toggleFarm(false, game.Players.LocalPlayer, sel, (require(script.Parent.data_monsters).weatherEventModels or {}), (require(script.Parent.data_monsters).toSahurModels or {}))
+      end
     end
   end))
 
   ------------------------------------------------------------------
   -- Anti-AFK
   ------------------------------------------------------------------
-  utils.track(ui.ToggleAntiAFKButton.MouseButton1Click:Connect(function()
+  utils.track(UI.ToggleAntiAFKButton.MouseButton1Click:Connect(function()
     antiAfkEnabled = not antiAfkEnabled
-    if antiAfkEnabled then antiAFK.enable() else antiAFK.disable() end
-    ui.ToggleAntiAFKButton.Text = 'Anti-AFK: '..(antiAfkEnabled and 'ON' or 'OFF')
-    ui.ToggleAntiAFKButton.BackgroundColor3 = antiAfkEnabled and constants.COLOR_BTN_ACTIVE or constants.COLOR_BTN
+    if antiAfkEnabled then
+      if antiAFK.enable then antiAFK.enable() end
+    else
+      if antiAFK.disable then antiAFK.disable() end
+    end
+    UI.ToggleAntiAFKButton.Text = 'Anti-AFK: '..(antiAfkEnabled and 'ON' or 'OFF')
+    UI.ToggleAntiAFKButton.BackgroundColor3 = antiAfkEnabled and constants.COLOR_BTN_ACTIVE or constants.COLOR_BTN
     notifyToggle('Anti-AFK', antiAfkEnabled)
   end))
 
   ------------------------------------------------------------------
   -- Merchants
   ------------------------------------------------------------------
-  utils.track(ui.ToggleMerchant1Button.MouseButton1Click:Connect(function()
+  utils.track(UI.ToggleMerchant1Button.MouseButton1Click:Connect(function()
     autoBuyM1Enabled = not autoBuyM1Enabled
-    ui.ToggleMerchant1Button.Text = 'Auto Buy Mythics (Chicleteiramania): '..(autoBuyM1Enabled and 'ON' or 'OFF')
-    ui.ToggleMerchant1Button.BackgroundColor3 = autoBuyM1Enabled and constants.COLOR_BTN_ACTIVE or constants.COLOR_BTN
+    UI.ToggleMerchant1Button.Text = 'Auto Buy Mythics (Chicleteiramania): '..(autoBuyM1Enabled and 'ON' or 'OFF')
+    UI.ToggleMerchant1Button.BackgroundColor3 = autoBuyM1Enabled and constants.COLOR_BTN_ACTIVE or constants.COLOR_BTN
     if autoBuyM1Enabled then
       notifyToggle('Merchant — Chicleteiramania', true)
       task.spawn(function()
         merchants.autoBuyLoop('SmelterMerchantService', function() return autoBuyM1Enabled end, function(sfx)
-          ui.ToggleMerchant1Button.Text = 'Auto Buy Mythics (Chicleteiramania): ON '..sfx
+          UI.ToggleMerchant1Button.Text = 'Auto Buy Mythics (Chicleteiramania): ON '..(sfx or '')
         end)
       end)
     else
@@ -84,15 +122,15 @@ function app.start()
     end
   end))
 
-  utils.track(ui.ToggleMerchant2Button.MouseButton1Click:Connect(function()
+  utils.track(UI.ToggleMerchant2Button.MouseButton1Click:Connect(function()
     autoBuyM2Enabled = not autoBuyM2Enabled
-    ui.ToggleMerchant2Button.Text = 'Auto Buy Mythics (Bombardino Sewer): '..(autoBuyM2Enabled and 'ON' or 'OFF')
-    ui.ToggleMerchant2Button.BackgroundColor3 = autoBuyM2Enabled and constants.COLOR_BTN_ACTIVE or constants.COLOR_BTN
+    UI.ToggleMerchant2Button.Text = 'Auto Buy Mythics (Bombardino Sewer): '..(autoBuyM2Enabled and 'ON' or 'OFF')
+    UI.ToggleMerchant2Button.BackgroundColor3 = autoBuyM2Enabled and constants.COLOR_BTN_ACTIVE or constants.COLOR_BTN
     if autoBuyM2Enabled then
       notifyToggle('Merchant — Bombardino Sewer', true)
       task.spawn(function()
         merchants.autoBuyLoop('SmelterMerchantService2', function() return autoBuyM2Enabled end, function(sfx)
-          ui.ToggleMerchant2Button.Text = 'Auto Buy Mythics (Bombardino Sewer): ON '..sfx
+          UI.ToggleMerchant2Button.Text = 'Auto Buy Mythics (Bombardino Sewer): ON '..(sfx or '')
         end)
       end)
     else
@@ -103,14 +141,17 @@ function app.start()
   ------------------------------------------------------------------
   -- Auto Crates
   ------------------------------------------------------------------
-  utils.track(ui.ToggleAutoCratesButton.MouseButton1Click:Connect(function()
+  utils.track(UI.ToggleAutoCratesButton.MouseButton1Click:Connect(function()
     autoOpenCratesEnabled = not autoOpenCratesEnabled
-    ui.ToggleAutoCratesButton.Text = 'Auto Open Crates: '..(autoOpenCratesEnabled and 'ON' or 'OFF')
-    ui.ToggleAutoCratesButton.BackgroundColor3 = autoOpenCratesEnabled and constants.COLOR_BTN_ACTIVE or constants.COLOR_BTN
+    UI.ToggleAutoCratesButton.Text = 'Auto Open Crates: '..(autoOpenCratesEnabled and 'ON' or 'OFF')
+    UI.ToggleAutoCratesButton.BackgroundColor3 = autoOpenCratesEnabled and constants.COLOR_BTN_ACTIVE or constants.COLOR_BTN
     if autoOpenCratesEnabled then
       crates.refreshCrateInventory(true)
-      notifyToggle('Crates', true, (' (1 every '..tostring(constants.crateOpenDelay or 1)..'s)'))
-      task.spawn(function() crates.autoOpenCratesEnabledLoop(function() return autoOpenCratesEnabled end) end)
+      local delay = tostring(constants.crateOpenDelay or 1)
+      notifyToggle('Crates', true, (' (1 every '..delay..'s)'))
+      task.spawn(function()
+        crates.autoOpenCratesEnabledLoop(function() return autoOpenCratesEnabled end)
+      end)
     else
       notifyToggle('Crates', false)
     end
@@ -119,11 +160,14 @@ function app.start()
   ------------------------------------------------------------------
   -- Close button
   ------------------------------------------------------------------
-  utils.track(ui.CloseButton.MouseButton1Click:Connect(function()
-    autoFarmEnabled=false; autoBuyM1Enabled=false; autoBuyM2Enabled=false; autoOpenCratesEnabled=false
-    if antiAfkEnabled then antiAFK.disable(); antiAfkEnabled=false end
+  utils.track(UI.CloseButton.MouseButton1Click:Connect(function()
+    autoFarmEnabled=false
+    autoBuyM1Enabled=false
+    autoBuyM2Enabled=false
+    autoOpenCratesEnabled=false
+    if antiAfkEnabled then if antiAFK.disable then antiAFK.disable() end; antiAfkEnabled=false end
     utils.notify('🌲 WoodzHUB', 'Closed. All loops stopped and UI removed.', 3.5)
-    ui.ScreenGui:Destroy()
+    UI.ScreenGui:Destroy()
   end))
 end
 
