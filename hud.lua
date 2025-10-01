@@ -1,11 +1,26 @@
 -- hud.lua
+-- Finds HUD and applies visibility flags (Premium/VIP/LimitedPet), with a watcher
+
+-- 🔧 Safe utils access
+local function getUtils()
+  local p = script and script.Parent
+  if p and p._deps and p._deps.utils then return p._deps.utils end
+  if rawget(getfenv(), "__WOODZ_UTILS") then return __WOODZ_UTILS end
+  error("[hud.lua] utils missing; ensure init.lua injects siblings._deps.utils before loading hud.lua")
+end
+
+local utils = getUtils()
+
 local M = {}
 
-local function findHUD(container)
+function M.findHUD(container)
+  if not container then return nil end
   local hud = container:FindFirstChild('HUD')
   if hud and hud:IsA('ScreenGui') then return hud end
   for _, inst in ipairs(container:GetDescendants()) do
-    if inst:IsA('ScreenGui') and inst.Name=='HUD' then return inst end
+    if inst:IsA('ScreenGui') and inst.Name == 'HUD' then
+      return inst
+    end
   end
   return nil
 end
@@ -33,26 +48,28 @@ local function applyLimitedPetHidden(hud, hidden)
 end
 
 function M.apply(hud, flags)
+  if not hud then return end
   applyPremiumHidden(hud, flags.premiumHidden)
   applyVipHidden(hud, flags.vipHidden)
   applyLimitedPetHidden(hud, flags.limitedPetHidden)
 end
 
 function M.watch(hud, flags)
-  if not hud then return function() end end
+  if not hud then return {Disconnect = function() end} end
   return hud.DescendantAdded:Connect(function(d)
     if not d:IsA('Frame') then return end
-    if flags.premiumHidden and d.Name=='Premium' and d.Parent and d.Parent.Name=='Buffs' then d.Visible=false; return end
-    if flags.vipHidden and d.Name=='VIP' then
-      local p=d.Parent; while p and p~=hud do if p.Name=='Buttons' then d.Visible=false; return end; p=p.Parent end
+    if flags.premiumHidden and d.Name == 'Premium' and d.Parent and d.Parent.Name == 'Buffs' then
+      d.Visible = false; return
     end
-    if flags.limitedPetHidden and d.Name=='LimitedPet1' then d.Visible=false; return end
+    if flags.vipHidden and d.Name == 'VIP' then
+      local p = d.Parent
+      while p and p ~= hud do
+        if p.Name == 'Buttons' then d.Visible = false; return end
+        p = p.Parent
+      end
+    end
+    if flags.limitedPetHidden and d.Name == 'LimitedPet1' then d.Visible = false; return end
   end)
 end
-
-M.findHUD = findHUD
-M.applyPremiumHidden = applyPremiumHidden
-M.applyVipHidden = applyVipHidden
-M.applyLimitedPetHidden = applyLimitedPetHidden
 
 return M
