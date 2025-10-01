@@ -1,5 +1,4 @@
 -- init.lua
--- 👉 Adjust BASE to your repo layout: with or without /woodzhub/ at the end.
 local BASE = 'https://raw.githubusercontent.com/HiddenSquidHiding/TheHUB/main/'
 
 -- Fetch helper
@@ -24,7 +23,7 @@ local function use(path)
 end
 
 --------------------------------------------------------------------
--- Embedded utils (so no network fetch for this one)
+-- Embedded utils (local; no network)
 --------------------------------------------------------------------
 local utils = (function()
   local Players  = game:GetService('Players')
@@ -46,7 +45,7 @@ local utils = (function()
   end
 
   function M.waitForCharacter()
-    local player = Players.LocalPlayer
+    local player = game:GetService('Players').LocalPlayer
     while not player.Character or not player.Character:FindFirstChild('HumanoidRootPart') or not player.Character:FindFirstChild('Humanoid') do
       player.CharacterAdded:Wait(); task.wait(0.1)
     end
@@ -60,24 +59,46 @@ local utils = (function()
   return M
 end)()
 
--- Sibling registry
+-- Sibling registry visible as `script.Parent`
 local siblings = { _deps = { utils = utils } }
 
--- Shim loader for require(script.Parent.X)
+-- Hardened shim loader for modules that do `require(script.Parent.X)`
 local function loadWithSiblings(path, sibs)
   local src = fetch(path)
   local chunk = loadstring(src, '='..path)
   assert(chunk)
+
   local baseEnv = getfenv()
   local fakeScript = { Parent = sibs }
-  local function shimRequire(target) if type(target)=='table' then return target else return baseEnv.require(target) end end
-  local sandbox = setmetatable({script=fakeScript, require=shimRequire},{__index=baseEnv})
-  sandbox._G=_G
+
+  local function shimRequire(target)
+    -- If they passed one of our injected tables (or any non-ModuleScript), just return it
+    if target == nil then
+      error(("[loader] require(nil) from %s — likely missing sibling (e.g. script.Parent._deps.utils). Check init.lua injected fields."):format(path), 2)
+    end
+    local t = typeof(target)
+    if t ~= "Instance" then
+      return target
+    end
+    if target:IsA("ModuleScript") then
+      return baseEnv.require(target)
+    else
+      -- Non-ModuleScript Instance — return as-is (or error)
+      return target
+    end
+  end
+
+  local sandbox = setmetatable({
+    script  = fakeScript,
+    require = shimRequire,
+  }, { __index = baseEnv })
+
+  sandbox._G = _G
   setfenv(chunk, sandbox)
   return chunk()
 end
 
--- Load core modules
+-- Load core modules (these must exist in your repo)
 local constants     = use('constants.lua')
 local data_monsters = use('data_monsters.lua')
 local hud           = use('hud.lua')
@@ -85,7 +106,7 @@ siblings.constants     = constants
 siblings.data_monsters = data_monsters
 siblings.hud           = hud
 
--- Load helpers
+-- Load helpers then app
 local anti_afk  = loadWithSiblings('anti_afk.lua', siblings)
 local crates    = loadWithSiblings('crates.lua', siblings)
 local merchants = loadWithSiblings('merchants.lua', siblings)
@@ -97,12 +118,8 @@ siblings.merchants = merchants
 siblings.farm      = farm
 siblings.ui        = ui
 
--- Boot app
 local app = loadWithSiblings('app.lua', siblings)
 app.start()
 
--- ✅ startup toast
-local utilsDep = siblings._deps and siblings._deps.utils
-if utilsDep then
-  utilsDep.notify('🌲 WoodzHUB', 'Loaded successfully from GitHub modules.', 5)
-end
+-- Startup toast
+utils.notify('🌲 WoodzHUB', 'Loaded successfully from GitHub modules.', 5)
