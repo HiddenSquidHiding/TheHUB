@@ -1,210 +1,252 @@
 -- farm.lua
--- Handles auto-farming logic for WoodzHUB
+-- Handles auto-farming logic for WoodzHUB, plus model selection & filtering
 
 local Players = game:GetService('Players')
 local Workspace = game:GetService('Workspace')
 local ReplicatedStorage = game:GetService('ReplicatedStorage')
-local RunService = game:GetService('RunService')
 
--- 🔧 Use injected utils directly (don’t require nil)
+-- 🔧 Use injected utils directly (no require(nil))
 local function getUtils()
-    local p = script and script.Parent
-    if p and p._deps and p._deps.utils then
-        return p._deps.utils
-    end
-    if rawget(getfenv(), "__WOODZ_UTILS") then
-        return __WOODZ_UTILS
-    end
-    error("[farm.lua] utils missing; ensure init.lua injects siblings._deps.utils before loading farm.lua")
+  local p = script and script.Parent
+  if p and p._deps and p._deps.utils then return p._deps.utils end
+  if rawget(getfenv(), "__WOODZ_UTILS") then return __WOODZ_UTILS end
+  error("[farm.lua] utils missing; ensure init.lua injects siblings._deps.utils before loading farm.lua")
 end
-
 local utils = getUtils()
 
--- Bring in monster data (this module is a plain table, safe to require)
+-- Data tables (groups, forced monsters)
 local data = require(script.Parent.data_monsters)
 
--- State
-local autoFarmEnabled = false
+-- State ---------------------------------------------------------
+local M = {}
 local autoAttackRemote = nil
-local currentTargetLabel = nil
-local spawnConnections = {}
 
--- Helpers
-local function waitForCharacter(player)
-    while not player.Character or not player.Character:FindFirstChild("HumanoidRootPart") do
-        player.CharacterAdded:Wait()
-        task.wait(0.1)
-    end
-    return player.Character
+-- Selection/filtering state
+local selectedMonsterModels = { 'Weather Events' }
+local allMonsterModels, filteredMonsterModels = {}, {}
+
+function M.getSelected() return selectedMonsterModels end
+function M.setSelected(t) selectedMonsterModels = t or {} end
+function M.getFiltered() return filteredMonsterModels end
+function M.isSelected(name) return table.find(selectedMonsterModels, name) ~= nil end
+function M.toggleSelect(name)
+  local idx = table.find(selectedMonsterModels, name)
+  if idx then table.remove(selectedMonsterModels, idx) else table.insert(selectedMonsterModels, name) end
 end
 
+-- Helpers -------------------------------------------------------
+local function pushUnique(valid, name)
+  if not table.find(valid, name)
+     and not table.find(data.toSahurModels, name)
+     and not table.find(data.weatherEventModels, name) then
+    table.insert(valid, name)
+  end
+end
+
+-- Index monsters present in Workspace + add forced ones + group entries
+function M.getMonsterModels()
+  local valid = {}
+
+  for _, node in ipairs(Workspace:GetDescendants()) do
+    if node:IsA('Model') and not Players:GetPlayerFromCharacter(node) then
+      local hum = node:FindFirstChildOfClass('Humanoid')
+      if hum and hum.Health > 0 then
+        pushUnique(valid, node.Name)
+      end
+    end
+  end
+
+  for _, nm in ipairs(data.forcedMonsters) do
+    pushUnique(valid, nm)
+  end
+
+  table.insert(valid, 'To Sahur')
+  table.insert(valid, 'Weather Events')
+
+  table.sort(valid)
+  allMonsterModels = valid
+  filteredMonsterModels = table.clone(valid)
+  return valid
+end
+
+-- Filter list by text (keeps groups if any member matches)
+function M.filterMonsterModels(text)
+  text = tostring(text or ''):lower()
+  local filtered = {}
+  local function matchesAny(list)
+    for _, n in ipairs(list) do
+      if string.find(n:lower(), text, 1, true) then return true end
+    end
+    return false
+  end
+  if text == '' then
+    filtered = allMonsterModels
+  else
+    for _, model in ipairs(allMonsterModels) do
+      if model == 'Weather Events' then
+        if matchesAny(data.weatherEventModels) then table.insert(filtered, model) end
+      elseif model == 'To Sahur' then
+        if matchesAny(data.toSahurModels) then table.insert(filtered, model) end
+      elseif string.find(model:lower(), text, 1, true) then
+        table.insert(filtered, model)
+      end
+    end
+  end
+  table.sort(filtered)
+  if #filtered == 0 then filtered = allMonsterModels end
+  filteredMonsterModels = filtered
+  return filtered
+end
+
+-- Enemy refresh with priority: Weather > Explicit > Sahur ------------------
+local function listEnemies()
+  local wantWeather = table.find(selectedMonsterModels, 'Weather Events') ~= nil
+  local wantSahur   = table.find(selectedMonsterModels, 'To Sahur') ~= nil
+
+  local weatherEnemies, otherEnemies, sahurEnemies = {}, {}, {}
+
+  local explicit = {}
+  for _, name in ipairs(selectedMonsterModels) do
+    if name ~= 'Weather Events' and name ~= 'To Sahur' then
+      explicit[name:lower()] = true
+    end
+  end
+
+  local function isIn(list, lname)
+    for _, n in ipairs(list) do
+      if lname == n:lower() then return true end
+    end
+    return false
+  end
+
+  for _, node in ipairs(Workspace:GetDescendants()) do
+    if node:IsA('Model') and not Players:GetPlayerFromCharacter(node) then
+      local h = node:FindFirstChildOfClass('Humanoid')
+      if h and h.Health > 0 then
+        local lname = node.Name:lower()
+        local isWeather  = wantWeather and isIn(data.weatherEventModels, lname)
+        local isExplicit = explicit[lname] == true
+        local isSahur    = wantSahur and isIn(data.toSahurModels, lname)
+        if isWeather then table.insert(weatherEnemies, node)
+        elseif isExplicit then table.insert(otherEnemies, node)
+        elseif isSahur then table.insert(sahurEnemies, node) end
+      end
+    end
+  end
+
+  local enemies = {}
+  for _, e in ipairs(weatherEnemies) do table.insert(enemies, e) end
+  for _, e in ipairs(otherEnemies) do table.insert(enemies, e) end
+  for _, e in ipairs(sahurEnemies) do table.insert(enemies, e) end
+  return enemies
+end
+
+-- Utils reused locally -----------------------------------------------------
 local function isValidCFrame(cf)
-    if not cf then return false end
-    local p = cf.Position
-    return p.X == p.X and p.Y == p.Y and p.Z == p.Z
+  if not cf then return false end
+  local p = cf.Position
+  return p.X == p.X and p.Y == p.Y and p.Z == p.Z
+     and math.abs(p.X) < 10000 and math.abs(p.Y) < 10000 and math.abs(p.Z) < 10000
 end
 
 local function findBasePart(model)
-    if not model then return nil end
-    local candidates = {"HumanoidRootPart","PrimaryPart","Body","Hitbox","Root","Main"}
-    for _, n in ipairs(candidates) do
-        local part = model:FindFirstChild(n)
-        if part and part:IsA("BasePart") then
-            return part
-        end
-    end
-    for _, d in ipairs(model:GetDescendants()) do
-        if d:IsA("BasePart") then return d end
-    end
-    return nil
+  if not model then return nil end
+  local candidates = { 'HumanoidRootPart','PrimaryPart','Body','Hitbox','Root','Main' }
+  for _, n in ipairs(candidates) do
+    local part = model:FindFirstChild(n)
+    if part and part:IsA('BasePart') then return part end
+  end
+  for _, d in ipairs(model:GetDescendants()) do
+    if d:IsA('BasePart') then return d end
+  end
+  return nil
 end
 
--- Remote setup
-local function setupAutoAttackRemote()
-    autoAttackRemote = nil
-    local ok, remote = pcall(function()
-        return ReplicatedStorage:WaitForChild("Packages")
-            :WaitForChild("Knit")
-            :WaitForChild("Services")
-            :WaitForChild("MonsterService")
-            :WaitForChild("RF")
-            :WaitForChild("RequestAttack")
-    end)
-    if ok and remote and remote:IsA("RemoteFunction") then
-        autoAttackRemote = remote
-        utils.notify("🌲 Auto Attack", "RequestAttack RemoteFunction found.", 5)
-    else
-        utils.notify("🌲 Error", "RequestAttack RemoteFunction not found. Farming may not work.", 5)
-    end
+-- Remotes ------------------------------------------------------------------
+function M.setupAutoAttackRemote()
+  autoAttackRemote = nil
+  local ok, remote = pcall(function()
+    return ReplicatedStorage:WaitForChild('Packages'):WaitForChild('Knit')
+      :WaitForChild('Services'):WaitForChild('MonsterService')
+      :WaitForChild('RF'):WaitForChild('RequestAttack')
+  end)
+  if ok and remote and remote:IsA('RemoteFunction') then
+    autoAttackRemote = remote
+    utils.notify('🌲 Auto Attack', 'RequestAttack RemoteFunction found.', 3)
+  else
+    utils.notify('🌲 Error', 'RequestAttack RemoteFunction not found. Farming may not work.', 5)
+  end
 end
 
--- Enemy scanning
-local function refreshEnemyList(selectedMonsterModels, weatherEventModels, toSahurModels)
-    local wantWeather = table.find(selectedMonsterModels, "Weather Events") ~= nil
-    local wantSahur = table.find(selectedMonsterModels, "To Sahur") ~= nil
+-- Main auto-farm loop (no floor pinning; just hover/teleport) --------------
+function M.runAutoFarm(getEnabled, setTargetText)
+  if not autoAttackRemote then return end
+  local player = Players.LocalPlayer
 
-    local weatherEnemies, otherEnemies, sahurEnemies = {}, {}, {}
-    local explicitSet = {}
-    for _, name in ipairs(selectedMonsterModels) do
-        if name ~= "Weather Events" and name ~= "To Sahur" then
-            explicitSet[name:lower()] = true
-        end
+  while getEnabled() do
+    local character = utils.waitForCharacter()
+    if not character or not character:FindFirstChild('HumanoidRootPart') then task.wait(0.5); continue end
+
+    local enemies = listEnemies()
+    if #enemies == 0 then
+      if setTargetText then setTargetText('Current Target: None') end
+      task.wait(0.5)
+      continue
     end
 
-    local function isIn(list, lname)
-        for _, n in ipairs(list) do
-            if lname == n:lower() then return true end
+    for _, enemy in ipairs(enemies) do
+      if not getEnabled() then if setTargetText then setTargetText('Current Target: None') end return end
+      if not enemy or not enemy.Parent or Players:GetPlayerFromCharacter(enemy) then continue end
+
+      local humanoid = enemy:FindFirstChildOfClass('Humanoid')
+      if not humanoid or humanoid.Health <= 0 then continue end
+
+      local targetPart = findBasePart(enemy)
+      if not targetPart then continue end
+      local targetCF = targetPart.CFrame * CFrame.new(0, 20, 0)
+      if not isValidCFrame(targetCF) then continue end
+
+      -- Teleport near target
+      local ok = pcall(function()
+        local ch = player.Character
+        if ch and ch:FindFirstChild('HumanoidRootPart') and ch:FindFirstChildOfClass('Humanoid') and ch.Humanoid.Health > 0 then
+          ch.HumanoidRootPart.CFrame = targetCF
         end
-        return false
+      end)
+      if not ok then continue end
+
+      if setTargetText then setTargetText(('Current Target: %s (Health: %d)'):format(enemy.Name, math.floor(humanoid.Health))) end
+
+      -- Hover above target while attacking
+      local hoverBP = Instance.new('BodyPosition')
+      hoverBP.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+      hoverBP.D = 1000; hoverBP.P = 10000
+      hoverBP.Position = targetCF.Position
+      hoverBP.Name = "WoodzHub_AttackHover"
+      hoverBP.Parent = character.HumanoidRootPart
+
+      local alive = true
+      while getEnabled() and enemy.Parent and humanoid and humanoid.Health > 0 do
+        local partNow = findBasePart(enemy)
+        if not partNow then alive = false break end
+        local cf = partNow.CFrame * CFrame.new(0, 20, 0)
+        if not isValidCFrame(cf) then alive = false break end
+        hoverBP.Position = cf.Position
+
+        local hrp = enemy:FindFirstChild('HumanoidRootPart')
+        if hrp then
+          pcall(function() autoAttackRemote:InvokeServer(hrp.CFrame) end)
+        end
+        task.wait(0.1)
+      end
+
+      if hoverBP then hoverBP:Destroy() end
+      if setTargetText then setTargetText('Current Target: None') end
+      if not getEnabled() then return end
     end
 
-    for _, node in ipairs(Workspace:GetDescendants()) do
-        if node:IsA("Model") and not Players:GetPlayerFromCharacter(node) then
-            local h = node:FindFirstChildOfClass("Humanoid")
-            if h and h.Health > 0 then
-                local lname = node.Name:lower()
-                local isWeather = wantWeather and isIn(weatherEventModels, lname)
-                local isExplicit = explicitSet[lname] == true
-                local isSahur = wantSahur and isIn(toSahurModels, lname)
-                if isWeather then
-                    table.insert(weatherEnemies, node)
-                elseif isExplicit then
-                    table.insert(otherEnemies, node)
-                elseif isSahur then
-                    table.insert(sahurEnemies, node)
-                end
-            end
-        end
-    end
-
-    local enemies = {}
-    for _, e in ipairs(weatherEnemies) do table.insert(enemies, e) end
-    for _, e in ipairs(otherEnemies) do table.insert(enemies, e) end
-    for _, e in ipairs(sahurEnemies) do table.insert(enemies, e) end
-    return enemies
-end
-
--- Farming loop
-local function autoFarmLoop(player, selectedMonsterModels, weatherEventModels, toSahurModels)
-    if not autoAttackRemote then
-        utils.notify("🌲 Error", "RequestAttack RemoteFunction not set.", 5)
-        return
-    end
-
-    while autoFarmEnabled do
-        local character = waitForCharacter(player)
-        if not character or not character:FindFirstChild("HumanoidRootPart") then
-            task.wait(1)
-            continue
-        end
-
-        local enemies = refreshEnemyList(selectedMonsterModels, weatherEventModels, toSahurModels)
-        if #enemies == 0 then
-            if currentTargetLabel then currentTargetLabel.Text = "Current Target: None" end
-            task.wait(0.5)
-            continue
-        end
-
-        for _, enemy in ipairs(enemies) do
-            if not autoFarmEnabled then
-                if currentTargetLabel then currentTargetLabel.Text = "Current Target: None" end
-                return
-            end
-            local humanoid = enemy:FindFirstChildOfClass("Humanoid")
-            if not humanoid or humanoid.Health <= 0 then continue end
-
-            -- Teleport near enemy
-            local targetPart = findBasePart(enemy)
-            if not targetPart then continue end
-            local targetCF = targetPart.CFrame * CFrame.new(0, 20, 0)
-            if not isValidCFrame(targetCF) then continue end
-
-            local hrp = character:FindFirstChild("HumanoidRootPart")
-            if hrp then hrp.CFrame = targetCF end
-
-            if currentTargetLabel then
-                currentTargetLabel.Text = "Current Target: " .. enemy.Name
-            end
-
-            -- Attack loop
-            while autoFarmEnabled and enemy.Parent and humanoid and humanoid.Health > 0 do
-                local hrp = enemy:FindFirstChild("HumanoidRootPart")
-                if hrp then
-                    autoAttackRemote:InvokeServer(hrp.CFrame)
-                end
-                task.wait(0.1)
-            end
-
-            if currentTargetLabel then
-                currentTargetLabel.Text = "Current Target: None"
-            end
-        end
-        task.wait(0.5)
-    end
-end
-
--- Public API
-local M = {}
-
-function M.setTargetLabel(label)
-    currentTargetLabel = label
-end
-
-function M.toggleFarm(flag, player, selectedMonsterModels, weatherEventModels, toSahurModels)
-    autoFarmEnabled = flag
-    if autoFarmEnabled then
-        utils.notify("🌲 Auto-Farm", "Enabled", 4)
-        setupAutoAttackRemote()
-        task.spawn(function()
-            autoFarmLoop(player, selectedMonsterModels, weatherEventModels, toSahurModels)
-        end)
-    else
-        utils.notify("🌲 Auto-Farm", "Disabled", 4)
-        for _, c in ipairs(spawnConnections) do
-            if c then c:Disconnect() end
-        end
-        table.clear(spawnConnections)
-    end
+    task.wait(0.25)
+  end
 end
 
 return M
