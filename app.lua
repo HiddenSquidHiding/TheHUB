@@ -11,7 +11,7 @@ end
 
 local utils      = getUtils()
 local constants  = require(script.Parent.constants)
-local ui         = require(script.Parent.ui)
+local uiModule   = require(script.Parent.ui)
 local farm       = require(script.Parent.farm)
 local merchants  = require(script.Parent.merchants)
 local crates     = require(script.Parent.crates)
@@ -20,11 +20,14 @@ local antiAFK    = require(script.Parent.anti_afk)
 local app = {}
 
 -- State flags
-local autoFarmEnabled       = false
-local autoBuyM1Enabled      = false
-local autoBuyM2Enabled      = false
-local autoOpenCratesEnabled = false
-local antiAfkEnabled        = false
+local autoFarmEnabled=false
+local autoBuyM1Enabled=false
+local autoBuyM2Enabled=false
+local autoOpenCratesEnabled=false
+local antiAfkEnabled=false
+
+-- UI refs (populated in start)
+local UI = nil
 
 -- Notify helper
 local function notifyToggle(name, on, extra)
@@ -33,29 +36,84 @@ local function notifyToggle(name, on, extra)
   utils.notify('🌲 ' .. name, msg, 3.5)
 end
 
--- Quick guard so we fail loudly if a control is missing
-local function need(ctrl, name)
-  if not ctrl then
-    utils.notify('🌲 WoodzHUB Error', ("Missing UI control: %s (check ui.build)"):format(name), 6)
-    error(("[app.lua] Missing UI control: %s"):format(name))
+-- Dropdown builder helpers -------------------------------------------------
+local function rebuildModelButtons()
+  -- clear old
+  for _, ch in ipairs(UI.ModelScrollFrame:GetChildren()) do
+    if ch:IsA('TextButton') then ch:Destroy() end
   end
-  return ctrl
+
+  local models = farm.getFiltered()
+  local count = 0
+  for _, name in ipairs(models) do
+    local btn = utils.new('TextButton', {
+      Size = UDim2.new(1, -10, 0, 30),
+      BackgroundColor3 = farm.isSelected(name) and constants.COLOR_BTN_ACTIVE or constants.COLOR_BTN,
+      TextColor3 = constants.COLOR_WHITE,
+      Text = name,
+      TextSize = 14,
+      Font = Enum.Font.SourceSans,
+      LayoutOrder = count,
+    }, UI.ModelScrollFrame)
+
+    utils.track(btn.MouseButton1Click:Connect(function()
+      farm.toggleSelect(name)
+      btn.BackgroundColor3 = farm.isSelected(name) and constants.COLOR_BTN_ACTIVE or constants.COLOR_BTN
+    end))
+
+    count += 1
+  end
+
+  UI.ModelScrollFrame.CanvasSize = UDim2.new(0,0,0,count * 30)
+end
+
+local function applySearchFilter(text)
+  farm.filterMonsterModels(text or '')
+  rebuildModelButtons()
 end
 
 function app.start()
-  ------------------------------------------------------------------
-  -- 1) Build UI first, then wire handlers
-  ------------------------------------------------------------------
-  local UI = ui.build()
-  -- Validate we have the controls we expect
-  need(UI.ScreenGui,            "ScreenGui")
-  need(UI.AutoFarmToggle,       "AutoFarmToggle")
-  need(UI.CurrentTargetLabel,   "CurrentTargetLabel")
-  need(UI.ToggleAntiAFKButton,  "ToggleAntiAFKButton")
-  need(UI.ToggleMerchant1Button,"ToggleMerchant1Button")
-  need(UI.ToggleMerchant2Button,"ToggleMerchant2Button")
-  need(UI.ToggleAutoCratesButton,"ToggleAutoCratesButton")
-  need(UI.CloseButton,          "CloseButton")
+  -- Build UI and capture all control references
+  UI = uiModule.build()
+
+  -- Wire search + presets + list -------------------------------------------
+  farm.getMonsterModels()
+  applySearchFilter('')
+
+  utils.track(UI.SearchTextBox:GetPropertyChangedSignal('Text'):Connect(function()
+    applySearchFilter(UI.SearchTextBox.Text)
+  end))
+
+  utils.track(UI.SelectSahurButton.MouseButton1Click:Connect(function()
+    local sel = farm.getSelected()
+    if not table.find(sel, 'To Sahur') then
+      sel = table.clone(sel); table.insert(sel, 'To Sahur'); farm.setSelected(sel); rebuildModelButtons()
+      utils.notify('🌲 Preset', 'Selected all To Sahur models.', 3)
+    end
+  end))
+
+  utils.track(UI.SelectWeatherButton.MouseButton1Click:Connect(function()
+    local sel = farm.getSelected()
+    if not table.find(sel, 'Weather Events') then
+      sel = table.clone(sel); table.insert(sel, 'Weather Events'); farm.setSelected(sel); rebuildModelButtons()
+      utils.notify('🌲 Preset', 'Selected all Weather Events models.', 3)
+    end
+  end))
+
+  utils.track(UI.SelectAllButton.MouseButton1Click:Connect(function()
+    farm.setSelected(table.clone(farm.getMonsterModels()))
+    rebuildModelButtons()
+    utils.notify('🌲 Preset', 'Selected all models.', 3)
+  end))
+
+  utils.track(UI.ClearAllButton.MouseButton1Click:Connect(function()
+    farm.setSelected({})
+    rebuildModelButtons()
+    utils.notify('🌲 Preset', 'Cleared all selections.', 3)
+  end))
+
+  -- Keep label updated by farm
+  farm.setTargetText = function(text) UI.CurrentTargetLabel.Text = text end
 
   ------------------------------------------------------------------
   -- Auto-Farm
@@ -66,25 +124,14 @@ function app.start()
     UI.AutoFarmToggle.BackgroundColor3 = autoFarmEnabled and constants.COLOR_BTN_ACTIVE or constants.COLOR_BTN
     if autoFarmEnabled then
       farm.setupAutoAttackRemote()
-      local sel = (farm.getSelected and farm.getSelected()) or nil
-      notifyToggle('Auto-Farm', true, (sel and #sel>0) and (' for: '..table.concat(sel, ', ')) or '')
+      local sel = farm.getSelected()
+      notifyToggle('Auto-Farm', true, sel and #sel>0 and (' for: '..table.concat(sel, ', ')) or '')
       task.spawn(function()
-        if farm.runAutoFarm then
-          farm.runAutoFarm(function() return autoFarmEnabled end, function(t) UI.CurrentTargetLabel.Text = t end)
-        else
-          -- Legacy API support
-          if farm.setTargetLabel then farm.setTargetLabel(UI.CurrentTargetLabel) end
-          farm.toggleFarm(true, game.Players.LocalPlayer, sel or {}, (require(script.Parent.data_monsters).weatherEventModels or {}), (require(script.Parent.data_monsters).toSahurModels or {}))
-        end
+        farm.runAutoFarm(function() return autoFarmEnabled end, function(t) UI.CurrentTargetLabel.Text = t end)
       end)
     else
       UI.CurrentTargetLabel.Text = 'Current Target: None'
       notifyToggle('Auto-Farm', false)
-      -- If using legacy API
-      if farm.toggleFarm then
-        local sel = (farm.getSelected and farm.getSelected()) or {}
-        farm.toggleFarm(false, game.Players.LocalPlayer, sel, (require(script.Parent.data_monsters).weatherEventModels or {}), (require(script.Parent.data_monsters).toSahurModels or {}))
-      end
     end
   end))
 
@@ -93,11 +140,7 @@ function app.start()
   ------------------------------------------------------------------
   utils.track(UI.ToggleAntiAFKButton.MouseButton1Click:Connect(function()
     antiAfkEnabled = not antiAfkEnabled
-    if antiAfkEnabled then
-      if antiAFK.enable then antiAFK.enable() end
-    else
-      if antiAFK.disable then antiAFK.disable() end
-    end
+    if antiAfkEnabled then antiAFK.enable() else antiAFK.disable() end
     UI.ToggleAntiAFKButton.Text = 'Anti-AFK: '..(antiAfkEnabled and 'ON' or 'OFF')
     UI.ToggleAntiAFKButton.BackgroundColor3 = antiAfkEnabled and constants.COLOR_BTN_ACTIVE or constants.COLOR_BTN
     notifyToggle('Anti-AFK', antiAfkEnabled)
@@ -114,7 +157,7 @@ function app.start()
       notifyToggle('Merchant — Chicleteiramania', true)
       task.spawn(function()
         merchants.autoBuyLoop('SmelterMerchantService', function() return autoBuyM1Enabled end, function(sfx)
-          UI.ToggleMerchant1Button.Text = 'Auto Buy Mythics (Chicleteiramania): ON '..(sfx or '')
+          UI.ToggleMerchant1Button.Text = 'Auto Buy Mythics (Chicleteiramania): ON '..sfx
         end)
       end)
     else
@@ -130,7 +173,7 @@ function app.start()
       notifyToggle('Merchant — Bombardino Sewer', true)
       task.spawn(function()
         merchants.autoBuyLoop('SmelterMerchantService2', function() return autoBuyM2Enabled end, function(sfx)
-          UI.ToggleMerchant2Button.Text = 'Auto Buy Mythics (Bombardino Sewer): ON '..(sfx or '')
+          UI.ToggleMerchant2Button.Text = 'Auto Buy Mythics (Bombardino Sewer): ON '..sfx
         end)
       end)
     else
@@ -147,11 +190,8 @@ function app.start()
     UI.ToggleAutoCratesButton.BackgroundColor3 = autoOpenCratesEnabled and constants.COLOR_BTN_ACTIVE or constants.COLOR_BTN
     if autoOpenCratesEnabled then
       crates.refreshCrateInventory(true)
-      local delay = tostring(constants.crateOpenDelay or 1)
-      notifyToggle('Crates', true, (' (1 every '..delay..'s)'))
-      task.spawn(function()
-        crates.autoOpenCratesEnabledLoop(function() return autoOpenCratesEnabled end)
-      end)
+      notifyToggle('Crates', true, (' (1 every '..tostring(constants.crateOpenDelay or 1)..'s)'))
+      task.spawn(function() crates.autoOpenCratesEnabledLoop(function() return autoOpenCratesEnabled end) end)
     else
       notifyToggle('Crates', false)
     end
@@ -161,13 +201,10 @@ function app.start()
   -- Close button
   ------------------------------------------------------------------
   utils.track(UI.CloseButton.MouseButton1Click:Connect(function()
-    autoFarmEnabled=false
-    autoBuyM1Enabled=false
-    autoBuyM2Enabled=false
-    autoOpenCratesEnabled=false
-    if antiAfkEnabled then if antiAFK.disable then antiAFK.disable() end; antiAfkEnabled=false end
+    autoFarmEnabled=false; autoBuyM1Enabled=false; autoBuyM2Enabled=false; autoOpenCratesEnabled=false
+    if antiAfkEnabled then antiAFK.disable(); antiAfkEnabled=false end
     utils.notify('🌲 WoodzHUB', 'Closed. All loops stopped and UI removed.', 3.5)
-    UI.ScreenGui:Destroy()
+    if UI.ScreenGui and UI.ScreenGui.Parent then UI.ScreenGui:Destroy() end
   end))
 end
 
