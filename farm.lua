@@ -1,5 +1,6 @@
 -- farm.lua
 -- Handles auto-farming logic for WoodzHUB, plus model selection & filtering
+-- Updated: instant hop to next target (no inter-target delay) + StreamingEnabled pivot approach
 
 local Players = game:GetService('Players')
 local Workspace = game:GetService('Workspace')
@@ -50,15 +51,11 @@ function M.getMonsterModels()
   for _, node in ipairs(Workspace:GetDescendants()) do
     if node:IsA('Model') and not Players:GetPlayerFromCharacter(node) then
       local hum = node:FindFirstChildOfClass('Humanoid')
-      if hum and hum.Health > 0 then
-        pushUnique(valid, node.Name)
-      end
+      if hum and hum.Health > 0 then pushUnique(valid, node.Name) end
     end
   end
 
-  for _, nm in ipairs(data.forcedMonsters) do
-    pushUnique(valid, nm)
-  end
+  for _, nm in ipairs(data.forcedMonsters) do pushUnique(valid, nm) end
 
   table.insert(valid, 'To Sahur')
   table.insert(valid, 'Weather Events')
@@ -74,9 +71,7 @@ function M.filterMonsterModels(text)
   text = tostring(text or ''):lower()
   local filtered = {}
   local function matchesAny(list)
-    for _, n in ipairs(list) do
-      if string.find(n:lower(), text, 1, true) then return true end
-    end
+    for _, n in ipairs(list) do if string.find(n:lower(), text, 1, true) then return true end end
     return false
   end
   if text == '' then
@@ -113,9 +108,7 @@ local function listEnemies()
   end
 
   local function isIn(list, lname)
-    for _, n in ipairs(list) do
-      if lname == n:lower() then return true end
-    end
+    for _, n in ipairs(list) do if lname == n:lower() then return true end end
     return false
   end
 
@@ -178,83 +171,123 @@ function M.setupAutoAttackRemote()
   end
 end
 
--- Main auto-farm loop (no floor pinning; hover/teleport + health updates) --
+-- Main auto-farm loop (pivot-first; teleports to stream in remote mobs) ----
 function M.runAutoFarm(getEnabled, setTargetText)
   if not autoAttackRemote then return end
   local player = Players.LocalPlayer
 
+  local function setLabel(txt) if setTargetText then setTargetText(txt) end end
+
   while getEnabled() do
     local character = utils.waitForCharacter()
-    if not character or not character:FindFirstChild('HumanoidRootPart') then task.wait(0.5); continue end
-
-    local enemies = listEnemies()
-    if #enemies == 0 then
-      if setTargetText then setTargetText('Current Target: None') end
-      task.wait(0.5)
+    if not character or not character:FindFirstChild('HumanoidRootPart') then
+      task.wait(0.05)  -- quick retry if character not ready
       continue
     end
 
+    local enemies = listEnemies()
+    if #enemies == 0 then
+      setLabel('Current Target: None')
+      task.wait(0.05)  -- tight polling so we hop ASAP when something spawns
+      continue
+    end
+
+    -- iterate current snapshot immediately; no inter-target sleeps
     for _, enemy in ipairs(enemies) do
-      if not getEnabled() then if setTargetText then setTargetText('Current Target: None') end return end
+      if not getEnabled() then setLabel('Current Target: None'); return end
       if not enemy or not enemy.Parent or Players:GetPlayerFromCharacter(enemy) then continue end
 
       local humanoid = enemy:FindFirstChildOfClass('Humanoid')
       if not humanoid or humanoid.Health <= 0 then continue end
 
+      -- Phase 1: try basepart; otherwise use pivot to approach
       local targetPart = findBasePart(enemy)
-      if not targetPart then continue end
-      local targetCF = targetPart.CFrame * CFrame.new(0, 20, 0)
-      if not isValidCFrame(targetCF) then continue end
+      local targetCF
 
-      -- Teleport near target
-      local ok = pcall(function()
+      if targetPart then
+        targetCF = targetPart.CFrame * CFrame.new(0, 20, 0)
+      else
+        local okPivot, pivotCF = pcall(function() return enemy:GetPivot() end)
+        if okPivot and isValidCFrame(pivotCF) then
+          targetCF = pivotCF * CFrame.new(0, 20, 0)
+        end
+      end
+
+      if not targetCF or not isValidCFrame(targetCF) then
+        task.wait(0.05)
+        local okPivot2, pivotCF2 = pcall(function() return enemy:GetPivot() end)
+        if okPivot2 and isValidCFrame(pivotCF2) then
+          targetCF = pivotCF2 * CFrame.new(0, 20, 0)
+        end
+      end
+
+      if not targetCF or not isValidCFrame(targetCF) then
+        continue
+      end
+
+      -- Teleport near target to stream in parts
+      local okTeleport = pcall(function()
         local ch = player.Character
         if ch and ch:FindFirstChild('HumanoidRootPart') and ch:FindFirstChildOfClass('Humanoid') and ch.Humanoid.Health > 0 then
           ch.HumanoidRootPart.CFrame = targetCF
         end
       end)
-      if not ok then continue end
+      if not okTeleport then continue end
 
-      if setTargetText then setTargetText(('Current Target: %s (Health: %d)'):format(enemy.Name, math.floor(humanoid.Health))) end
+      -- Resolve a real base part with a short timeout
+      local APPROACH_TIMEOUT = 3.0
+      local t0 = tick()
+      repeat
+        task.wait(0.05)
+        targetPart = findBasePart(enemy)
+      until targetPart or (tick() - t0) > APPROACH_TIMEOUT or not enemy.Parent or (humanoid and humanoid.Health <= 0)
 
-      -- Hover above target while attacking
+      if not targetPart then continue end
+
+      -- Now attack with live tracking
+      local cf = targetPart.CFrame * CFrame.new(0, 20, 0)
+      if not isValidCFrame(cf) then continue end
+
+      setLabel(('Current Target: %s (Health: %d)'):format(enemy.Name, math.floor(humanoid.Health)))
+
       local hoverBP = Instance.new('BodyPosition')
       hoverBP.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
       hoverBP.D = 1000; hoverBP.P = 10000
-      hoverBP.Position = targetCF.Position
+      hoverBP.Position = cf.Position
       hoverBP.Name = "WoodzHub_AttackHover"
       hoverBP.Parent = character.HumanoidRootPart
 
-      -- 🔁 Live health updates
-      local hcConn
-      if setTargetText then
-        hcConn = humanoid.HealthChanged:Connect(function(h)
-          setTargetText(('Current Target: %s (Health: %d)'):format(enemy.Name, math.floor(h)))
-        end)
-      end
+      local hcConn = humanoid.HealthChanged:Connect(function(h)
+        setLabel(('Current Target: %s (Health: %d)'):format(enemy.Name, math.floor(h)))
+      end)
 
+      -- Attack loop; no sleeps beyond attack cadence; re-resolve part if needed
+      local TARGET_TIMEOUT = 30
+      local start = tick()
       while getEnabled() and enemy.Parent and humanoid and humanoid.Health > 0 do
-        local partNow = findBasePart(enemy)
-        if not partNow then break end
-        local cf = partNow.CFrame * CFrame.new(0, 20, 0)
-        if not isValidCFrame(cf) then break end
-        hoverBP.Position = cf.Position
+        if (tick() - start) > TARGET_TIMEOUT then break end
+        local partNow = findBasePart(enemy) or targetPart
+        local cfNow = partNow and (partNow.CFrame * CFrame.new(0, 20, 0))
+        if cfNow and isValidCFrame(cfNow) then
+          hoverBP.Position = cfNow.Position
+        end
 
         local hrp = enemy:FindFirstChild('HumanoidRootPart')
-        if hrp then
-          pcall(function() autoAttackRemote:InvokeServer(hrp.CFrame) end)
-        end
-        task.wait(0.1)
+        if hrp then pcall(function() autoAttackRemote:InvokeServer(hrp.CFrame) end) end
+        task.wait(0.1) -- attack cadence
       end
 
       if hcConn then hcConn:Disconnect() end
       if hoverBP then hoverBP:Destroy() end
+      setLabel('Current Target: None')
 
-      if setTargetText then setTargetText('Current Target: None') end
       if not getEnabled() then return end
+      -- ⬆️ immediately proceed to next enemy in this snapshot (no delay)
     end
 
-    task.wait(0.25)
+    -- Immediately loop to rescan for anything new (no inter-iteration delay)
+    -- (Tiny 0.01 to yield; prevents hard lockup without impacting hop speed)
+    task.wait(0.01)
   end
 end
 
