@@ -16,11 +16,13 @@ local farm       = require(script.Parent.farm)
 local merchants  = require(script.Parent.merchants)
 local crates     = require(script.Parent.crates)
 local antiAFK    = require(script.Parent.anti_afk)
+local smartFarm  = require(script.Parent.smart_target)
 
 local app = {}
 
 -- State flags
 local autoFarmEnabled=false
+local smartFarmEnabled=false
 local autoBuyM1Enabled=false
 local autoBuyM2Enabled=false
 local autoOpenCratesEnabled=false
@@ -29,61 +31,60 @@ local antiAfkEnabled=false
 -- UI refs (populated in start)
 local UI = nil
 
--- Notify helper
 local function notifyToggle(name, on, extra)
   extra = extra or ''
   local msg = on and (name .. ' enabled' .. extra) or (name .. ' disabled')
   utils.notify('🌲 ' .. name, msg, 3.5)
 end
 
--- Dropdown builder helpers -------------------------------------------------
-local function rebuildModelButtons()
-  -- clear old
-  for _, ch in ipairs(UI.ModelScrollFrame:GetChildren()) do
-    if ch:IsA('TextButton') then ch:Destroy() end
-  end
-
-  local models = farm.getFiltered()
-  local count = 0
-  for _, name in ipairs(models) do
-    local btn = utils.new('TextButton', {
-      Size = UDim2.new(1, -10, 0, 30),
-      BackgroundColor3 = farm.isSelected(name) and constants.COLOR_BTN_ACTIVE or constants.COLOR_BTN,
-      TextColor3 = constants.COLOR_WHITE,
-      Text = name,
-      TextSize = 14,
-      Font = Enum.Font.SourceSans,
-      LayoutOrder = count,
-    }, UI.ModelScrollFrame)
-
-    utils.track(btn.MouseButton1Click:Connect(function()
-      farm.toggleSelect(name)
-      btn.BackgroundColor3 = farm.isSelected(name) and constants.COLOR_BTN_ACTIVE or constants.COLOR_BTN
-    end))
-
-    count += 1
-  end
-
-  UI.ModelScrollFrame.CanvasSize = UDim2.new(0,0,0,count * 30)
+local function setAutoFarmUI(on)
+  UI.AutoFarmToggle.Text = 'Auto-Farm: '..(on and 'ON' or 'OFF')
+  UI.AutoFarmToggle.BackgroundColor3 = on and constants.COLOR_BTN_ACTIVE or constants.COLOR_BTN
 end
-
-local function applySearchFilter(text)
-  farm.filterMonsterModels(text or '')
-  rebuildModelButtons()
+local function setSmartFarmUI(on)
+  UI.SmartFarmToggle.Text = 'Smart Farm: '..(on and 'ON' or 'OFF')
+  UI.SmartFarmToggle.BackgroundColor3 = on and constants.COLOR_BTN_ACTIVE or constants.COLOR_BTN
 end
 
 function app.start()
-  -- Build UI and capture all control references
   UI = uiModule.build()
 
-  -- Wire search + presets + list -------------------------------------------
+  ------------------------------------------------------------------
+  -- Build model list, search, presets
+  ------------------------------------------------------------------
   farm.getMonsterModels()
+  local function rebuildModelButtons()
+    for _, ch in ipairs(UI.ModelScrollFrame:GetChildren()) do
+      if ch:IsA('TextButton') then ch:Destroy() end
+    end
+    local models = farm.getFiltered()
+    local count = 0
+    for _, name in ipairs(models) do
+      local btn = utils.new('TextButton', {
+        Size = UDim2.new(1, -10, 0, 30),
+        BackgroundColor3 = farm.isSelected(name) and constants.COLOR_BTN_ACTIVE or constants.COLOR_BTN,
+        TextColor3 = constants.COLOR_WHITE,
+        Text = name,
+        TextSize = 14,
+        Font = Enum.Font.SourceSans,
+        LayoutOrder = count,
+      }, UI.ModelScrollFrame)
+      utils.track(btn.MouseButton1Click:Connect(function()
+        farm.toggleSelect(name)
+        btn.BackgroundColor3 = farm.isSelected(name) and constants.COLOR_BTN_ACTIVE or constants.COLOR_BTN
+      end))
+      count += 1
+    end
+    UI.ModelScrollFrame.CanvasSize = UDim2.new(0,0,0,count * 30)
+  end
+  local function applySearchFilter(text)
+    farm.filterMonsterModels(text or '')
+    rebuildModelButtons()
+  end
   applySearchFilter('')
-
   utils.track(UI.SearchTextBox:GetPropertyChangedSignal('Text'):Connect(function()
     applySearchFilter(UI.SearchTextBox.Text)
   end))
-
   utils.track(UI.SelectSahurButton.MouseButton1Click:Connect(function()
     local sel = farm.getSelected()
     if not table.find(sel, 'To Sahur') then
@@ -91,7 +92,6 @@ function app.start()
       utils.notify('🌲 Preset', 'Selected all To Sahur models.', 3)
     end
   end))
-
   utils.track(UI.SelectWeatherButton.MouseButton1Click:Connect(function()
     local sel = farm.getSelected()
     if not table.find(sel, 'Weather Events') then
@@ -99,29 +99,32 @@ function app.start()
       utils.notify('🌲 Preset', 'Selected all Weather Events models.', 3)
     end
   end))
-
   utils.track(UI.SelectAllButton.MouseButton1Click:Connect(function()
     farm.setSelected(table.clone(farm.getMonsterModels()))
     rebuildModelButtons()
     utils.notify('🌲 Preset', 'Selected all models.', 3)
   end))
-
   utils.track(UI.ClearAllButton.MouseButton1Click:Connect(function()
     farm.setSelected({})
     rebuildModelButtons()
     utils.notify('🌲 Preset', 'Cleared all selections.', 3)
   end))
 
-  -- Keep label updated by farm
-  farm.setTargetText = function(text) UI.CurrentTargetLabel.Text = text end
-
   ------------------------------------------------------------------
-  -- Auto-Farm
+  -- Auto-Farm (mutually exclusive with Smart Farm)
   ------------------------------------------------------------------
   utils.track(UI.AutoFarmToggle.MouseButton1Click:Connect(function()
-    autoFarmEnabled = not autoFarmEnabled
-    UI.AutoFarmToggle.Text = 'Auto-Farm: '..(autoFarmEnabled and 'ON' or 'OFF')
-    UI.AutoFarmToggle.BackgroundColor3 = autoFarmEnabled and constants.COLOR_BTN_ACTIVE or constants.COLOR_BTN
+    local newState = not autoFarmEnabled
+
+    -- if turning ON, turn smart farm OFF
+    if newState and smartFarmEnabled then
+      smartFarmEnabled = false
+      setSmartFarmUI(false)
+      notifyToggle('Smart Farm', false)
+    end
+
+    autoFarmEnabled = newState
+    setAutoFarmUI(autoFarmEnabled)
     if autoFarmEnabled then
       farm.setupAutoAttackRemote()
       local sel = farm.getSelected()
@@ -132,6 +135,43 @@ function app.start()
     else
       UI.CurrentTargetLabel.Text = 'Current Target: None'
       notifyToggle('Auto-Farm', false)
+    end
+  end))
+
+  ------------------------------------------------------------------
+  -- Smart Farm (mutually exclusive with Auto-Farm)
+  ------------------------------------------------------------------
+  utils.track(UI.SmartFarmToggle.MouseButton1Click:Connect(function()
+    local newState = not smartFarmEnabled
+
+    -- if turning ON, turn auto farm OFF
+    if newState and autoFarmEnabled then
+      autoFarmEnabled = false
+      setAutoFarmUI(false)
+      notifyToggle('Auto-Farm', false)
+    end
+
+    smartFarmEnabled = newState
+    setSmartFarmUI(smartFarmEnabled)
+    if smartFarmEnabled then
+      -- Locate MonsterInfo by default; you can change this if your game stores it elsewhere
+      local module = ReplicatedStorage:FindFirstChild("MonsterInfo") or ReplicatedStorage:WaitForChild("MonsterInfo", 5)
+      notifyToggle('Smart Farm', true, module and '' or ' (MonsterInfo not found; will stop)')
+      if module then
+        task.spawn(function()
+          smartFarm.runSmartFarm(function() return smartFarmEnabled end, function(txt) UI.CurrentTargetLabel.Text = txt end, {
+            module = module,
+            safetyBuffer = 0.8,
+            refreshInterval = 0.05,
+          })
+        end)
+      else
+        smartFarmEnabled = false
+        setSmartFarmUI(false)
+      end
+    else
+      UI.CurrentTargetLabel.Text = 'Current Target: None'
+      notifyToggle('Smart Farm', false)
     end
   end))
 
@@ -201,11 +241,6 @@ function app.start()
   -- Close button
   ------------------------------------------------------------------
   utils.track(UI.CloseButton.MouseButton1Click:Connect(function()
-    autoFarmEnabled=false; autoBuyM1Enabled=false; autoBuyM2Enabled=false; autoOpenCratesEnabled=false
+    autoFarmEnabled=false; smartFarmEnabled=false; autoBuyM1Enabled=false; autoBuyM2Enabled=false; autoOpenCratesEnabled=false
     if antiAfkEnabled then antiAFK.disable(); antiAfkEnabled=false end
-    utils.notify('🌲 WoodzHUB', 'Closed. All loops stopped and UI removed.', 3.5)
-    if UI.ScreenGui and UI.ScreenGui.Parent then UI.ScreenGui:Destroy() end
-  end))
-end
-
-return app
+    utils.notify('🌲 WoodzHUB', 'Closed. All loops
