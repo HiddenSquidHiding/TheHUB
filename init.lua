@@ -1,6 +1,6 @@
 -- init.lua
 -- 👉 Adjust BASE to your repo layout.
-local BASE = 'https://raw.githubusercontent.com/HiddenSquidHiding/TheHUB/main/woodzhub/'
+local BASE = 'https://raw.githubusercontent.com/HiddenSquidHiding/TheHUB/main/'
 
 local function fetch(path)
   local ok, res = pcall(function() return game:HttpGet(BASE .. path) end)
