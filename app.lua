@@ -18,18 +18,18 @@ local crates     = require(script.Parent.crates)
 local antiAFK    = require(script.Parent.anti_afk)
 local smartFarm  = require(script.Parent.smart_target)
 
--- ✅ Needed for Smart Farm (fixes: attempt to index nil with 'FindFirstChild')
+-- ✅ Needed for MonsterInfo lookup
 local ReplicatedStorage = game:GetService('ReplicatedStorage')
 
 local app = {}
 
 -- State flags
-local autoFarmEnabled=false
-local smartFarmEnabled=false
-local autoBuyM1Enabled=false
-local autoBuyM2Enabled=false
-local autoOpenCratesEnabled=false
-local antiAfkEnabled=false
+local autoFarmEnabled      = false
+local smartFarmEnabled     = false
+local autoBuyM1Enabled     = false
+local autoBuyM2Enabled     = false
+local autoOpenCratesEnabled= false
+local antiAfkEnabled       = false
 
 -- UI refs (populated in start)
 local UI = nil
@@ -47,6 +47,39 @@ end
 local function setSmartFarmUI(on)
   UI.SmartFarmToggle.Text = 'Smart Farm: '..(on and 'ON' or 'OFF')
   UI.SmartFarmToggle.BackgroundColor3 = on and constants.COLOR_BTN_ACTIVE or constants.COLOR_BTN
+end
+
+-- 🔍 Resolve ReplicatedStorage MonsterInfo in several common locations
+local function resolveMonsterInfo()
+  local RS = ReplicatedStorage
+  local candidatePaths = {
+    {"GameInfo","MonsterInfo"},     -- << your path
+    {"MonsterInfo"},
+    {"Shared","MonsterInfo"},
+    {"Modules","MonsterInfo"},
+    {"Configs","MonsterInfo"},
+  }
+
+  -- Try listed paths (with short WaitForChild fallback)
+  for _, path in ipairs(candidatePaths) do
+    local node = RS
+    local ok = true
+    for i, name in ipairs(path) do
+      node = node:FindFirstChild(name) or node:WaitForChild(name, 1)
+      if not node then ok = false; break end
+    end
+    if ok and node and node:IsA("ModuleScript") then
+      return node
+    end
+  end
+
+  -- Last resort: scan descendants for a ModuleScript named "MonsterInfo"
+  for _, d in ipairs(RS:GetDescendants()) do
+    if d:IsA("ModuleScript") and d.Name == "MonsterInfo" then
+      return d
+    end
+  end
+  return nil
 end
 
 function app.start()
@@ -155,9 +188,9 @@ function app.start()
     smartFarmEnabled = newState
     setSmartFarmUI(smartFarmEnabled)
     if smartFarmEnabled then
-      -- Look for MonsterInfo (ModuleScript). Timeout returns nil; we handle below.
-      local module = ReplicatedStorage:FindFirstChild("MonsterInfo") or ReplicatedStorage:WaitForChild("MonsterInfo", 5)
-      notifyToggle('Smart Farm', true, module and '' or ' (MonsterInfo not found; will stop)')
+      -- ✅ Use robust resolver (supports ReplicatedStorage.GameInfo.MonsterInfo)
+      local module = resolveMonsterInfo()
+      notifyToggle('Smart Farm', true, module and (' — using '..module:GetFullName()) or ' (MonsterInfo not found; will stop)')
       if module then
         task.spawn(function()
           smartFarm.runSmartFarm(function() return smartFarmEnabled end, function(txt) UI.CurrentTargetLabel.Text = txt end, {
