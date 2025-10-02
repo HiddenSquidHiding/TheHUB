@@ -243,4 +243,9 @@ function app.start()
   utils.track(UI.CloseButton.MouseButton1Click:Connect(function()
     autoFarmEnabled=false; smartFarmEnabled=false; autoBuyM1Enabled=false; autoBuyM2Enabled=false; autoOpenCratesEnabled=false
     if antiAfkEnabled then antiAFK.disable(); antiAfkEnabled=false end
-    utils.notify('🌲 WoodzHUB', 'Closed. All loops
+    utils.notify('🌲 WoodzHUB', 'Closed. All loops stopped and UI removed.', 3.5)
+    if UI.ScreenGui and UI.ScreenGui.Parent then UI.ScreenGui:Destroy() end
+  end))
+end
+
+return app
