@@ -18,6 +18,9 @@ local crates     = require(script.Parent.crates)
 local antiAFK    = require(script.Parent.anti_afk)
 local smartFarm  = require(script.Parent.smart_target)
 
+-- ✅ Needed for Smart Farm (fixes: attempt to index nil with 'FindFirstChild')
+local ReplicatedStorage = game:GetService('ReplicatedStorage')
+
 local app = {}
 
 -- State flags
@@ -116,7 +119,6 @@ function app.start()
   utils.track(UI.AutoFarmToggle.MouseButton1Click:Connect(function()
     local newState = not autoFarmEnabled
 
-    -- if turning ON, turn smart farm OFF
     if newState and smartFarmEnabled then
       smartFarmEnabled = false
       setSmartFarmUI(false)
@@ -144,7 +146,6 @@ function app.start()
   utils.track(UI.SmartFarmToggle.MouseButton1Click:Connect(function()
     local newState = not smartFarmEnabled
 
-    -- if turning ON, turn auto farm OFF
     if newState and autoFarmEnabled then
       autoFarmEnabled = false
       setAutoFarmUI(false)
@@ -154,7 +155,7 @@ function app.start()
     smartFarmEnabled = newState
     setSmartFarmUI(smartFarmEnabled)
     if smartFarmEnabled then
-      -- Locate MonsterInfo by default; you can change this if your game stores it elsewhere
+      -- Look for MonsterInfo (ModuleScript). Timeout returns nil; we handle below.
       local module = ReplicatedStorage:FindFirstChild("MonsterInfo") or ReplicatedStorage:WaitForChild("MonsterInfo", 5)
       notifyToggle('Smart Farm', true, module and '' or ' (MonsterInfo not found; will stop)')
       if module then
