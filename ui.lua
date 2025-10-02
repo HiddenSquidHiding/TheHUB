@@ -143,8 +143,16 @@ function M.build()
     Text='Auto-Farm: OFF', TextSize=14, Font=Enum.Font.SourceSans
   }, UI.MainTabFrame)
 
-  UI.CurrentTargetLabel = utils.new('TextLabel', {
+  -- NEW: Smart Farm toggle (sits below Auto-Farm)
+  UI.SmartFarmToggle = utils.new('TextButton', {
     Size=UDim2.new(1,-20,0,30), Position=UDim2.new(0,10,0,290),
+    BackgroundColor3=constants.COLOR_BTN, TextColor3=constants.COLOR_WHITE,
+    Text='Smart Farm: OFF', TextSize=14, Font=Enum.Font.SourceSans
+  }, UI.MainTabFrame)
+
+  -- Move target label down to make space
+  UI.CurrentTargetLabel = utils.new('TextLabel', {
+    Size=UDim2.new(1,-20,0,30), Position=UDim2.new(0,10,0,330),
     BackgroundColor3=constants.COLOR_BG_MED, TextColor3=constants.COLOR_WHITE,
     Text='Current Target: None', TextSize=14, Font=Enum.Font.SourceSans
   }, UI.MainTabFrame)
@@ -179,7 +187,6 @@ function M.build()
   --------------------------------------------------------------------------
   local isMinimized = false
 
-  -- Dragging
   do
     local dragging, dragStart, startPos = false, nil, nil
     local function begin(input)
@@ -203,7 +210,6 @@ function M.build()
     utils.track(UserInputService.InputChanged:Connect(update))
   end
 
-  -- Tab switching helpers
   local function switchToMain()
     if isMinimized then return end
     UI.MainTabFrame.Visible = true
@@ -223,7 +229,6 @@ function M.build()
   utils.track(UI.MainTabButton.MouseButton1Click:Connect(switchToMain))
   utils.track(UI.LoggingTabButton.MouseButton1Click:Connect(switchToOptions))
 
-  -- Min/Max
   local function minimize()
     isMinimized = true
     MainFrame.Size = constants.SIZE_MIN
@@ -235,7 +240,6 @@ function M.build()
   local function maximize()
     isMinimized = false
     MainFrame.Size = constants.SIZE_MAIN
-    -- Keep whichever tab is currently active by button color
     if UI.MainTabButton.BackgroundColor3 == constants.COLOR_BTN then
       switchToMain()
     else
