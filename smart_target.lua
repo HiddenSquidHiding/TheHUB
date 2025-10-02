@@ -1,6 +1,6 @@
 -- smart_target.lua
--- Loads/decompiles a MonsterInfo ModuleScript and smart-targets mobs you can safely kill
--- Uses StreamingEnabled-friendly approach (pivot → approach → basepart) and instant hop.
+-- Smart-targets mobs you can safely kill using MonsterInfo + REAL player stats.
+-- Handles StreamingEnabled (pivot → approach → basepart), instant hops, and huge number parsing.
 
 -- 🔧 Safe utils access
 local function getUtils()
@@ -17,6 +17,80 @@ local Workspace = game:GetService('Workspace')
 local ReplicatedStorage = game:GetService('ReplicatedStorage')
 
 local M = {}
+
+----------------------------------------------------------------------
+-- Number parsing (handles trillions+ and formatted strings)
+----------------------------------------------------------------------
+
+local SUFFIXES = {
+  k = 1e3,  K = 1e3,
+  m = 1e6,  M = 1e6,
+  b = 1e9,  B = 1e9,
+  t = 1e12, T = 1e12,
+  qa = 1e15, QA = 1e15, Qa = 1e15,
+  qi = 1e18, QI = 1e18, Qi = 1e18,
+  sx = 1e21, SX = 1e21, Sx = 1e21,
+  sp = 1e24, SP = 1e24, Sp = 1e24,
+  oc = 1e27, OC = 1e27, Oc = 1e27,
+  no = 1e30, NO = 1e30, No = 1e30,
+  de = 1e33, DE = 1e33, De = 1e33,
+}
+
+local function parseNumber(v)
+  local tv = typeof(v)
+  if tv == "number" then return v end
+  if tv ~= "string" then return nil end
+
+  -- remove commas/spaces
+  local s = (v:gsub("[%s,]", ""))
+
+  -- scientific notation?
+  local n = tonumber(s)
+  if n then return n end
+
+  -- suffix pattern: 123.45T / 999Qa / 1.2qi, etc.
+  local num, suf = s:match("^([%+%-]?%d+%.?%d*)(%a+)$")
+  if num and suf then
+    local base = tonumber(num)
+    local mult = SUFFIXES[suf]
+    if base and mult then return base * mult end
+  end
+
+  -- bare digits as last resort
+  local digits = s:match("^(%d+)$")
+  if digits then return tonumber(digits) end
+
+  return nil
+end
+
+-- Deep search for a stat by key preference list
+local function deepFindNumber(tbl, keys)
+  local best = nil
+  local function try(v)
+    local n = parseNumber(v)
+    if n then
+      if not best or n > best then best = n end
+    end
+  end
+  local function walk(t, depth)
+    if type(t) ~= "table" or depth > 5 then return end
+    -- direct keys first (exact / contains)
+    for k,v in pairs(t) do
+      if type(k) == "string" then
+        local kl = k:lower()
+        for _, want in ipairs(keys) do
+          if kl == want or kl:find(want, 1, true) then try(v) end
+        end
+      end
+    end
+    -- then recurse
+    for _, v in pairs(t) do
+      if type(v) == "table" then walk(v, depth+1) end
+    end
+  end
+  walk(tbl, 0)
+  return best
+end
 
 ----------------------------------------------------------------------
 -- Load / Decompile MonsterInfo
@@ -52,6 +126,7 @@ function M.loadMonsterInfo(mod)
   if typeof(mod) ~= "Instance" or not mod:IsA("ModuleScript") then
     return nil, "[smart] expected a ModuleScript"
   end
+  -- require first
   do
     local ok, ret = pcall(function() return require(mod) end)
     if ok and type(ret) == "table" then
@@ -59,6 +134,7 @@ function M.loadMonsterInfo(mod)
       return ret, nil
     end
   end
+  -- decompile fallback
   local src = tryDecompile(mod)
   if src then
     local tbl, err = evalModuleSource(src, "=" .. mod:GetFullName())
@@ -109,22 +185,65 @@ local function listAllEnemies()
   return enemies
 end
 
+----------------------------------------------------------------------
+-- Robust player stats extraction (handles huge numbers & multiple sources)
+----------------------------------------------------------------------
+
 local function getPlayerStats()
+  local player = Players.LocalPlayer
+  local character = player.Character or player.CharacterAdded:Wait()
+
+  -- Start with Humanoid health (often set to your true MaxHealth client-side)
+  local humanoid = character:FindFirstChildOfClass("Humanoid")
+  local health = (humanoid and (humanoid.MaxHealth > 0 and humanoid.MaxHealth or humanoid.Health)) or 1000
+  local damage = 100 -- will upgrade as we find better values
+
+  -- 1) Knit LookupService.RF.GetPlayerData (server authoritative)
   local GetPlayerData
-  local ok, rf = pcall(function()
+  local okRF, rf = pcall(function()
     return ReplicatedStorage.Packages.Knit.Services.LookupService.RF.GetPlayerData
   end)
-  if ok and rf and rf:IsA("RemoteFunction") then
+  if okRF and rf and rf:IsA("RemoteFunction") then
     GetPlayerData = rf
+    local ok, stats = pcall(function() return GetPlayerData:InvokeServer() end)
+    if ok and type(stats) == "table" then
+      local dmg = deepFindNumber(stats, { "damage","attack","power","dps","strength" })
+      local hp  = deepFindNumber(stats, { "maxhealth","health","hp" })
+      if dmg then damage = dmg end
+      if hp  then health = hp end
+    end
   end
-  local damage, health = 100, 1000
-  local ok2, stats = pcall(function()
-    return GetPlayerData and GetPlayerData:InvokeServer()
-  end)
-  if ok2 and type(stats) == "table" then
-    damage = stats.Damage or stats.AttackPower or stats.Power or damage
-    health = stats.MaxHealth or stats.Health or health
+
+  -- 2) leaderstats (common)
+  local ls = player:FindFirstChild("leaderstats")
+  if ls then
+    local dmgLS = deepFindNumber(ls, { "damage","attack","power","dps","strength" })
+    local hpLS  = deepFindNumber(ls, { "maxhealth","health","hp" })
+    if dmgLS and dmgLS > damage then damage = dmgLS end
+    if hpLS  and hpLS  > health then health = hpLS  end
   end
+
+  -- 3) generic Stats/PlayerData folders
+  for _, name in ipairs({ "Stats","PlayerStats","PlayerData","Data","Attributes" }) do
+    local n = player:FindFirstChild(name)
+    if n then
+      local dmgN = deepFindNumber(n, { "damage","attack","power","dps","strength" })
+      local hpN  = deepFindNumber(n, { "maxhealth","health","hp" })
+      if dmgN and dmgN > damage then damage = dmgN end
+      if hpN  and hpN  > health then health = hpN  end
+    end
+  end
+
+  -- 4) Humanoid again (in case it updated after calls)
+  if humanoid then
+    if humanoid.MaxHealth and humanoid.MaxHealth > health then health = humanoid.MaxHealth end
+    if humanoid.Health and humanoid.Health > health then health = humanoid.Health end
+  end
+
+  -- Sanity: ensure positive numbers
+  if not damage or damage <= 0 then damage = 100 end
+  if not health or health <= 0 then health = 1000 end
+
   return damage, health
 end
 
@@ -132,21 +251,33 @@ end
 -- Targeting logic
 ----------------------------------------------------------------------
 
+-- Read monster stats from MonsterInfo entry or live Humanoid
 local function readMobStats(monsterInfo, name, humanoid)
   local entry = monsterInfo and monsterInfo[name]
   local mHealth = (humanoid and humanoid.Health) or 0
   local mAttack = 10
   if type(entry) == "table" then
-    mHealth = entry.Health or entry.health or entry.MaxHealth or mHealth
-    mAttack = entry.Attack or entry.Damage or entry.attack or entry.damage or mAttack
+    local h = entry.Health or entry.health or entry.MaxHealth or entry.maxhealth
+    local a = entry.Attack or entry.attack or entry.Damage or entry.damage
+    mHealth = parseNumber(h) or mHealth
+    mAttack = parseNumber(a) or mAttack
+  elseif type(entry) == "string" or type(entry) == "number" then
+    -- Some games store just a number as HP
+    mHealth = parseNumber(entry) or mHealth
+  end
+  -- If live humanoid has bigger health (e.g., scaled bosses), prefer that
+  if humanoid and humanoid.Health and humanoid.Health > mHealth then
+    mHealth = humanoid.Health
   end
   return mHealth, mAttack
 end
 
+-- Decide if the player can kill safely
+-- safetyBuffer: fraction of player HP that we're willing to spend (default 0.8)
 local function canKill(playerDamage, playerHealth, mobHealth, mobAttack, safetyBuffer)
   safetyBuffer = safetyBuffer or 0.8
-  if playerDamage <= 0 then return false end
-  local hitsToKill = math.ceil((mobHealth > 0 and mobHealth or 1) / playerDamage)
+  local dmg = playerDamage > 0 and playerDamage or 1
+  local hitsToKill = math.ceil((mobHealth > 0 and mobHealth or 1) / dmg)
   local estDamageTaken = hitsToKill * (mobAttack > 0 and mobAttack or 0)
   return estDamageTaken < (playerHealth * safetyBuffer)
 end
@@ -206,7 +337,7 @@ local function attackEnemy(player, enemy, onText)
   local cf = targetPart.CFrame * CFrame.new(0, 20, 0)
   if not isValidCFrame(cf) then return end
 
-  if onText then onText(("Current Target: %s (Health: %d)"):format(enemy.Name, math.floor(humanoid.Health))) end
+  if onText then onText(("Current Target: %s (Health: %s)"):format(enemy.Name, math.floor(humanoid.Health))) end
 
   local hoverBP = Instance.new("BodyPosition")
   hoverBP.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
@@ -218,7 +349,7 @@ local function attackEnemy(player, enemy, onText)
   hoverBP.Parent = character.HumanoidRootPart
 
   local hcConn = humanoid.HealthChanged:Connect(function(h)
-    if onText then onText(("Current Target: %s (Health: %d)"):format(enemy.Name, math.floor(h))) end
+    if onText then onText(("Current Target: %s (Health: %s)"):format(enemy.Name, math.floor(h))) end
   end)
 
   local start = tick()
@@ -234,7 +365,7 @@ local function attackEnemy(player, enemy, onText)
     if hrp and autoAttackRemote then
       pcall(function() autoAttackRemote:InvokeServer(hrp.CFrame) end)
     end
-    task.wait(0.1)
+    task.wait(0.05) -- a bit faster cadence since you’re high damage
   end
 
   if hcConn then hcConn:Disconnect() end
@@ -265,9 +396,10 @@ function M.runSmartFarm(getEnabled, setTargetText, opts)
       continue
     end
 
+    -- ✅ Real, large numbers supported here
     local pDmg, pHP = getPlayerStats()
-    local enemies = listAllEnemies()
 
+    local enemies = listAllEnemies()
     local candidates = {}
     for _, enemy in ipairs(enemies) do
       local hum = enemy:FindFirstChildOfClass("Humanoid")
@@ -285,10 +417,10 @@ function M.runSmartFarm(getEnabled, setTargetText, opts)
       continue
     end
 
+    -- Prioritize fastest kills: lowest (mHealth / pDmg) first; tie-break by current humanoid health
     table.sort(candidates, function(a,b)
       local ha = (a:FindFirstChildOfClass("Humanoid") and a.Humanoid.Health) or math.huge
       local hb = (b:FindFirstChildOfClass("Humanoid") and b.Humanoid.Health) or math.huge
-      if ha == hb then return tostring(a.Name) < tostring(b.Name) end
       return ha < hb
     end)
 
@@ -296,6 +428,7 @@ function M.runSmartFarm(getEnabled, setTargetText, opts)
       if not getEnabled() then if setTargetText then setTargetText("Current Target: None") end return end
       attackEnemy(player, enemy, setTargetText)
     end
+
     task.wait(0.01)
   end
 end
