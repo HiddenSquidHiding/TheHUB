@@ -1,7 +1,6 @@
 -- smart_target.lua
 -- Smart-targets mobs you can safely kill using MonsterInfo + REAL player stats.
--- Robust stat resolver: tries Knit RFs, leaderstats, folders, attributes, tools, UI/Replicated values.
--- Console debug prints (_G.WOODZHUB_DEBUG=true) show which sources were used.
+-- Super-robust stat resolver with deep probes and detailed console prints.
 
 -- 🔧 Safe utils access
 local function getUtils()
@@ -62,9 +61,11 @@ end
 local damageKeys = { "damage","attack","atk","power","dps","strength","str","atkpower","attackpower","weapon","sword","hit" }
 local healthKeys = { "maxhealth","health","hp","life","hearts","vitality" }
 
--- Deep search a table-ish structure
+----------------------------------------------------------------------
+-- Table & Instance scanners
+----------------------------------------------------------------------
 local function deepFindNumber(tbl, keys, maxDepth)
-  maxDepth = maxDepth or 6
+  maxDepth = maxDepth or 7
   local best, bestKey = nil, nil
   local function try(k, v)
     local n = parseNumber(v)
@@ -88,13 +89,60 @@ local function deepFindNumber(tbl, keys, maxDepth)
   return best, bestKey
 end
 
--- Roblox ValueBase → number
 local function valueObjectToNumber(obj)
   if not obj or not obj:IsA("ValueBase") then return nil end
   if obj:IsA("NumberValue") or obj:IsA("IntValue") then return obj.Value end
   if obj:IsA("StringValue") then return parseNumber(obj.Value) end
   local v = rawget(obj, "Value")
   return parseNumber(v)
+end
+
+local function textToNumber(label)
+  if not label or not label:IsA("TextLabel") then return nil end
+  local txt = tostring(label.Text or "")
+  -- grab the biggest number looking substring
+  local candidate = txt:match("([%d%.,]+%a?)") or txt:match("([%d%.,]+)")
+  return candidate and parseNumber(candidate) or nil
+end
+
+local function getAttributesNumber(inst, names)
+  if not inst or not inst.GetAttribute then return nil end
+  for _, key in ipairs(names) do
+    local v = inst:GetAttribute(key)
+    local n = parseNumber(v)
+    if n then return n, "Attribute:"..key end
+  end
+  return nil
+end
+
+local function extractFromFolder(folder, wantDamage)
+  if not folder then return nil end
+  local best, source = nil, nil
+  for _, v in ipairs(folder:GetDescendants()) do
+    if v:IsA("ValueBase") then
+      local nl = v.Name:lower()
+      for _, key in ipairs(wantDamage and damageKeys or healthKeys) do
+        if nl:find(key, 1, true) then
+          local n = valueObjectToNumber(v)
+          if n and (not best or n > best) then best, source = n, v:GetFullName() end
+        end
+      end
+    elseif v:IsA("TextLabel") and wantDamage then
+      -- sometimes UI shows a big "Damage: 1.2T"
+      local n = textToNumber(v)
+      if n and (not best or n > best) then best, source = n, v:GetFullName()..":Text" end
+    elseif v:IsA("ModuleScript") then
+      local ok, tbl = pcall(function() return require(v) end)
+      if ok and type(tbl) == "table" then
+        local n, k = deepFindNumber(tbl, wantDamage and damageKeys or healthKeys)
+        if n and (not best or n > best) then best, source = n, v:GetFullName()..":table("..tostring(k)..")" end
+      end
+    end
+  end
+  -- also attributes on the folder
+  local nAttr, where = getAttributesNumber(folder, wantDamage and damageKeys or healthKeys)
+  if nAttr and (not best or nAttr > best) then best, source = nAttr, folder:GetFullName().."@"..where end
+  return best, source
 end
 
 ----------------------------------------------------------------------
@@ -180,43 +228,6 @@ end
 ----------------------------------------------------------------------
 -- Aggressive player stats resolver
 ----------------------------------------------------------------------
-local function getAttributesNumber(inst, names)
-  if not inst or not inst.GetAttribute then return nil end
-  for _, key in ipairs(names) do
-    local v = inst:GetAttribute(key)
-    local n = parseNumber(v)
-    if n then return n, "Attribute:"..key end
-  end
-  return nil
-end
-
-local function extractFromFolder(folder, wantDamage)
-  if not folder then return nil end
-  local best, source = nil, nil
-  for _, v in ipairs(folder:GetDescendants()) do
-    if v:IsA("ValueBase") then
-      for _, key in ipairs(wantDamage and damageKeys or healthKeys) do
-        if v.Name:lower():find(key, 1, true) then
-          local n = valueObjectToNumber(v)
-          if n and (not best or n > best) then best, source = n, v:GetFullName() end
-        end
-      end
-    elseif v:IsA("ModuleScript") then
-      local ok, tbl = pcall(function() return require(v) end)
-      if ok and type(tbl) == "table" then
-        local n, k = deepFindNumber(tbl, wantDamage and damageKeys or healthKeys)
-        if n and (not best or n > best) then best, source = n, v:GetFullName()..":table("..tostring(k)..")" end
-      end
-    elseif v:IsA("Folder") then
-      -- also check Attributes in folders
-      local nAttr, where = getAttributesNumber(v, wantDamage and damageKeys or healthKeys)
-      if nAttr and (not best or nAttr > best) then best, source = nAttr, v:GetFullName().."@"..where end
-    end
-  end
-  return best, source
-end
-
--- Probe common Knit services & methods for player stats
 local function probeKnitRemotes()
   local out = {}
   local okKnit, knit = pcall(function() return ReplicatedStorage.Packages.Knit end)
@@ -224,13 +235,13 @@ local function probeKnitRemotes()
   local okServices, services = pcall(function() return knit.Services end)
   if not okServices or not services then return out end
 
-  local candidateServices = { "LookupService","StatsService","CombatService","PlayerService","DamageService" }
-  local candidateMethods  = { "GetPlayerData","GetStats","GetPlayerStats","GetInfo","GetDamage","GetPower" }
+  local candidateServices = { "LookupService","StatsService","CombatService","PlayerService","DamageService","ProfileService" }
+  local candidateMethods  = { "GetPlayerData","GetStats","GetPlayerStats","GetInfo","GetDamage","GetPower","GetProfile" }
 
   for _, svcName in ipairs(candidateServices) do
     local svc = services:FindFirstChild(svcName)
     if svc then
-      local RF = svc:FindFirstChild("RF")
+      local RF = svc:FindChild("RF") or svc:FindFirstChild("RF")
       if RF then
         for _, m in ipairs(candidateMethods) do
           local rf = RF:FindFirstChild(m)
@@ -247,29 +258,72 @@ local function probeKnitRemotes()
   return out
 end
 
--- Scan tools (Character + Backpack) for configs/values/attributes
+-- Careful brute-force: only RFs with promising names; invoke without args
+local function probeReplicatedRFs()
+  local found = {}
+  local function promising(name)
+    local n = name:lower()
+    return n:find("damage",1,true) or n:find("power",1,true) or n:find("stat",1,true)
+        or n:find("info",1,true) or n:find("data",1,true) or n:find("profile",1,true)
+  end
+  for _, d in ipairs(ReplicatedStorage:GetDescendants()) do
+    if d:IsA("RemoteFunction") and promising(d.Name) then
+      local ok, res = pcall(function() return d:InvokeServer() end)
+      if ok and res ~= nil then
+        found[d:GetFullName()] = res
+      end
+    end
+  end
+  return found
+end
+
+-- Per-player data folders in ReplicatedStorage commonly used by games
+local function probePerPlayerData(player)
+  local candidates = {
+    {"PlayerData", tostring(player.UserId)},
+    {"PlayersData", tostring(player.UserId)},
+    {"Profiles", tostring(player.UserId)},
+    {"Profiles"},
+    {"DataStore","Players", tostring(player.UserId)},
+    {"GameData","Players", tostring(player.UserId)},
+  }
+  local results = {}
+  for _, path in ipairs(candidates) do
+    local node = ReplicatedStorage
+    local ok = true
+    for _, name in ipairs(path) do
+      node = node:FindFirstChild(name)
+      if not node then ok=false; break end
+    end
+    if ok and node then
+      if node:IsA("ModuleScript") then
+        local ok2, tbl = pcall(function() return require(node) end)
+        if ok2 and type(tbl) == "table" then results[node:GetFullName()] = tbl end
+      elseif #node:GetChildren() > 0 then
+        results[node:GetFullName()] = node
+      end
+    end
+  end
+  return results
+end
+
+-- Tools (Backpack + Character)
 local function probeTools(player)
   local results = {}
   local function scanContainer(cont)
     if not cont then return end
     for _, tool in ipairs(cont:GetChildren()) do
       if tool:IsA("Tool") or tool:IsA("Accessory") then
-        -- Attributes on tool
         local nd, wd = getAttributesNumber(tool, damageKeys); if nd then results[tool:GetFullName()..".AttrDamage"] = nd end
         local nh, wh = getAttributesNumber(tool, healthKeys); if nh then results[tool:GetFullName()..".AttrHealth"] = nh end
-        -- Value objects
         for _, v in ipairs(tool:GetDescendants()) do
           if v:IsA("ValueBase") then
             local nl = v.Name:lower()
             for _, key in ipairs(damageKeys) do
-              if nl:find(key, 1, true) then
-                local n = valueObjectToNumber(v); if n then results[v:GetFullName()] = n end
-              end
+              if nl:find(key,1,true) then local n=valueObjectToNumber(v); if n then results[v:GetFullName()] = n end end
             end
             for _, key in ipairs(healthKeys) do
-              if nl:find(key, 1, true) then
-                local n = valueObjectToNumber(v); if n then results[v:GetFullName()] = n end
-              end
+              if nl:find(key,1,true) then local n=valueObjectToNumber(v); if n then results[v:GetFullName()] = n end end
             end
           elseif v:IsA("ModuleScript") then
             local ok, tbl = pcall(function() return require(v) end)
@@ -289,34 +343,39 @@ local function probeTools(player)
   return results
 end
 
--- Scan PlayerGui / ReplicatedStorage for ValueBase named like damage
-local function probeReplicated(player)
+-- PlayerGui & Humanoid scans
+local function probeUIAndHumanoid(player)
   local results = {}
-  local function scan(root)
-    if not root then return end
-    for _, v in ipairs(root:GetDescendants()) do
-      if v:IsA("ValueBase") then
-        local nl = v.Name:lower()
-        for _, key in ipairs(damageKeys) do
-          if nl:find(key, 1, true) then
-            local n = valueObjectToNumber(v); if n then results[v:GetFullName()] = n end
-          end
-        end
-        for _, key in ipairs(healthKeys) do
-          if nl:find(key, 1, true) then
-            local n = valueObjectToNumber(v); if n then results[v:GetFullName()] = n end
-          end
+  local gui = player:FindFirstChild("PlayerGui")
+  if gui then
+    local d, src = extractFromFolder(gui, true);  if d then results[src or (gui:GetFullName()..":UI_Damage")] = d end
+    local h, src2= extractFromFolder(gui, false); if h then results[src2 or (gui:GetFullName()..":UI_Health")] = h end
+  end
+  local char = player.Character
+  if char then
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    if hum then
+      local ad, as = getAttributesNumber(hum, damageKeys); if ad then results["Humanoid@"..(as or "Attr")] = ad end
+      local ah, as2= getAttributesNumber(hum, healthKeys); if ah then results["Humanoid@"..(as2 or "Attr")] = ah end
+      for _, v in ipairs(hum:GetChildren()) do
+        if v:IsA("ValueBase") then
+          local nl = v.Name:lower()
+          for _, key in ipairs(damageKeys) do if nl:find(key,1,true) then local n=valueObjectToNumber(v); if n then results[v:GetFullName()] = n end end end
+          for _, key in ipairs(healthKeys) do if nl:find(key,1,true) then local n=valueObjectToNumber(v); if n then results[v:GetFullName()] = n end end end
         end
       end
     end
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    if hrp then
+      local ad, as = getAttributesNumber(hrp, damageKeys); if ad then results["HRP@"..(as or "Attr")] = ad end
+      local ah, as2= getAttributesNumber(hrp, healthKeys); if ah then results["HRP@"..(as2 or "Attr")] = ah end
+    end
   end
-  scan(player:FindFirstChild("PlayerGui"))
-  scan(ReplicatedStorage)
   return results
 end
 
 local function getPlayerStats(debugNow)
-  -- Global overrides / hook (for quick testing)
+  -- Global overrides / hook
   if type(_G.WOODZHUB_STAT_HOOK) == "function" then
     local ok, d, h = pcall(_G.WOODZHUB_STAT_HOOK)
     if ok and tonumber(d) and tonumber(h) then
@@ -334,14 +393,12 @@ local function getPlayerStats(debugNow)
   local character = player.Character or player.CharacterAdded:Wait()
   local humanoid = character:FindFirstChildOfClass("Humanoid")
 
-  -- collect candidate sources
   local sources = {}
-
   local function record(tag, n, where)
     if n and n > 0 then sources[tag] = { value = n, where = where } end
   end
 
-  -- Humanoid health baseline
+  -- Humanoid baseline
   if humanoid then
     local hMax = humanoid.MaxHealth and humanoid.MaxHealth > 0 and humanoid.MaxHealth or nil
     record("HumanoidMaxHealth", hMax, "Humanoid.MaxHealth")
@@ -357,9 +414,22 @@ local function getPlayerStats(debugNow)
       record("KnitRF_Damage_"..k, d, k..":"..tostring(dk))
       record("KnitRF_Health_"..k, h, k..":"..tostring(hk))
     else
-      -- simple numeric return?
-      local d = parseNumber(payload)
-      if d then record("KnitRF_Number_"..k, d, k) end
+      local n = parseNumber(payload)
+      if n then record("KnitRF_Number_"..k, n, k) end
+    end
+  end
+
+  -- Replicated RFs (promising names)
+  local rfPayloads = probeReplicatedRFs()
+  for k, payload in pairs(rfPayloads) do
+    if type(payload) == "table" then
+      local d, dk = deepFindNumber(payload, damageKeys)
+      local h, hk = deepFindNumber(payload, healthKeys)
+      record("RF_Damage_"..k, d, k..":"..tostring(dk))
+      record("RF_Health_"..k, h, k..":"..tostring(hk))
+    else
+      local n = parseNumber(payload)
+      if n then record("RF_Number_"..k, n, k) end
     end
   end
 
@@ -370,44 +440,52 @@ local function getPlayerStats(debugNow)
     local h1, s2 = extractFromFolder(ls, false); record("LS_Health", h1, s2)
   end
 
-  -- Player folders
+  -- common player folders
   for _, name in ipairs({ "Stats","PlayerStats","PlayerData","Data","Attributes","Info" }) do
     local n = player:FindFirstChild(name)
     if n then
       local d2, sd2 = extractFromFolder(n, true);  record("P_"..name.."_Damage", d2, sd2)
       local h2, sh2 = extractFromFolder(n, false); record("P_"..name.."_Health", h2, sh2)
-      local ad, asr = getAttributesNumber(n, damageKeys); if ad then record("P_"..name.."_AttrDamage", ad, asr) end
-      local ah, asr2= getAttributesNumber(n, healthKeys); if ah then record("P_"..name.."_AttrHealth", ah, asr2) end
+      local ad, as  = getAttributesNumber(n, damageKeys); if ad then record("P_"..name.."_AttrDamage", ad, as) end
+      local ah, as2 = getAttributesNumber(n, healthKeys); if ah then record("P_"..name.."_AttrHealth", ah, as2) end
     end
   end
 
-  -- Attributes on Player / Character
-  do
-    local ad, asr = getAttributesNumber(player, damageKeys); if ad then record("Attr_Damage_Player", ad, asr) end
-    local ah, asr2= getAttributesNumber(player, healthKeys); if ah then record("Attr_Health_Player", ah, asr2) end
-    local cd, csr = getAttributesNumber(character, damageKeys); if cd then record("Attr_Damage_Char", cd, csr) end
-    local ch, csr2= getAttributesNumber(character, healthKeys); if ch then record("Attr_Health_Char", ch, csr2) end
+  -- Per-player data in ReplicatedStorage
+  local perPlayer = probePerPlayerData(player)
+  for k, payload in pairs(perPlayer) do
+    if typeof(payload) == "Instance" then
+      local d3, sd3 = extractFromFolder(payload, true);  record("RS_PlayerData_Damage@"..k, d3, k)
+      local h3, sh3 = extractFromFolder(payload, false); record("RS_PlayerData_Health@"..k, h3, k)
+    elseif type(payload) == "table" then
+      local d4, dk4 = deepFindNumber(payload, damageKeys); record("RS_PlayerTable_Damage@"..k, d4, k..":"..tostring(dk4))
+      local h4, hk4 = deepFindNumber(payload, healthKeys); record("RS_PlayerTable_Health@"..k, h4, k..":"..tostring(hk4))
+    end
   end
 
-  -- Tools (Backpack + Character)
-  local toolFinds = probeTools(player)
-  for k,v in pairs(toolFinds) do record("Tool_"..k, v, k) end
+  -- Tools / UI / Humanoid extended
+  for k,v in pairs(probeTools(player)) do record("Tool@"..k, v, k) end
+  for k,v in pairs(probeUIAndHumanoid(player)) do record("UIHum@"..k, v, k) end
 
-  -- Replicated ValueBases (PlayerGui + ReplicatedStorage)
-  local repFinds = probeReplicated(player)
-  for k,v in pairs(repFinds) do record("Rep_"..k, v, k) end
+  -- Also check attributes on Player/Character directly
+  do
+    local ad, as = getAttributesNumber(player, damageKeys); if ad then record("Attr_Damage_Player", ad, as) end
+    local ah, as2= getAttributesNumber(player, healthKeys); if ah then record("Attr_Health_Player", ah, as2) end
+    local cd, cs = getAttributesNumber(character, damageKeys); if cd then record("Attr_Damage_Char", cd, cs) end
+    local ch, cs2= getAttributesNumber(character, healthKeys); if ch then record("Attr_Health_Char", ch, cs2) end
+  end
 
   -- Choose winners (or forced overrides)
   local damage, damageWhere = forcedD or nil, forcedD and "forced" or "n/a"
   local health, healthWhere = forcedH or nil, forcedH and "forced" or "n/a"
 
   for k, v in pairs(sources) do
-    if k:lower():find("damage") then
+    if k:lower():find("damage") or k:lower():find("power") or k:lower():find("attack") then
       if not damage or v.value > damage then damage, damageWhere = v.value, v.where end
     end
   end
   for k, v in pairs(sources) do
-    if k:lower():find("health") then
+    if k:lower():find("health") or k:lower():find("hp") then
       if not health or v.value > health then health, healthWhere = v.value, v.where end
     end
   end
@@ -419,17 +497,17 @@ local function getPlayerStats(debugNow)
     health, healthWhere = hh, "humanoidFallback"
   end
 
-  -- Debug dump
-  dprint(debugNow, ("Player Stats | DAMAGE: %s  (from %s) |  HEALTH: %s (from %s)")
-    :format(tostring(damage), tostring(damageWhere), tostring(health), tostring(healthWhere)))
+  -- Pretty debug dump (sorted by value)
   if debugNow then
-    dprint(true, "All detected sources (non-zero):")
-    local keys = {}
-    for k in pairs(sources) do table.insert(keys, k) end
-    table.sort(keys)
-    for _, k in ipairs(keys) do
-      local v = sources[k]
-      dprint(true, ("  %s = %s  @ %s"):format(k, tostring(v.value), tostring(v.where)))
+    local items = {}
+    for k,v in pairs(sources) do table.insert(items, {k=k, v=v}) end
+    table.sort(items, function(a,b) return a.v.value > b.v.value end)
+    dprint(true, ("Player Stats | DAMAGE: %s  (from %s) | HEALTH: %s (from %s)")
+      :format(tostring(damage), tostring(damageWhere), tostring(health), tostring(healthWhere)))
+    dprint(true, "Top detected sources (non-zero):")
+    for i=1, math.min(#items, 20) do
+      local it = items[i]
+      dprint(true, ("  [%2d] %-90s = %-24s @ %s"):format(i, it.k, tostring(it.v.value), tostring(it.v.where)))
     end
   end
 
@@ -466,7 +544,7 @@ local function canKill(playerDamage, playerHealth, mobHealth, mobAttack, safetyB
 end
 
 ----------------------------------------------------------------------
--- Attack driver (StreamingEnabled friendly; instant hop)
+-- Attack driver
 ----------------------------------------------------------------------
 local autoAttackRemote = nil
 local function ensureAttackRemote()
@@ -557,7 +635,6 @@ end
 
 ----------------------------------------------------------------------
 -- Public: run smart farm
---   opts = { module = <ModuleScript>, safetyBuffer = 0.8, refreshInterval = 0.05, debug = false }
 ----------------------------------------------------------------------
 function M.runSmartFarm(getEnabled, setTargetText, opts)
   opts = opts or {}
