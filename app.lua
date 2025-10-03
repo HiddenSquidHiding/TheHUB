@@ -193,11 +193,16 @@ function app.start()
       notifyToggle('Smart Farm', true, module and (' — using '..module:GetFullName()) or ' (MonsterInfo not found; will stop)')
       if module then
         task.spawn(function()
-          smartFarm.runSmartFarm(function() return smartFarmEnabled end, function(txt) UI.CurrentTargetLabel.Text = txt end, {
-            module = module,
-            safetyBuffer = 0.8,
-            refreshInterval = 0.05,
-          })
+          smartFarm.runSmartFarm(
+  function() return smartFarmEnabled end,
+  function(txt) UI.CurrentTargetLabel.Text = txt end,
+  {
+    module = resolveMonsterInfo(),
+    safetyBuffer = 0.8,
+    refreshInterval = 0.05,
+    debug = true, -- <- will print your DAMAGE and HEALTH sources/values
+  }
+)
         end)
       else
         smartFarmEnabled = false
