@@ -17,7 +17,6 @@ local merchants  = require(script.Parent.merchants)
 local crates     = require(script.Parent.crates)
 local antiAFK    = require(script.Parent.anti_afk)
 local smartFarm  = require(script.Parent.smart_target)
-local attackProfiler = require(script.Parent.attack_profiler)
 
 -- ✅ Needed for MonsterInfo lookup
 local ReplicatedStorage = game:GetService('ReplicatedStorage')
