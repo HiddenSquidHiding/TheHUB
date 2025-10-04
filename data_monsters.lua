@@ -17,7 +17,7 @@ M.weatherEventModels = {
   'Chicleteira','YONII','Coccodrillo Cheese','Chachechchachachachi',
   'CanneIIoni Dragoni','GALALTUS MEDUS','Hipopotamino Supermakretino',
   'Market Crate','BOSS','MALAME AMARALE BOSS','Malame Crate','Las Vaquitas',
-  'Trippi Troppi Troppa Trippa Boss','Los Tralaleritos',
+  'Trippi Troppi Troppa Trippa Boss','Los Trippitroppito',
   'Trippi Troppi Troppa Trippa Boss2','Blueberrinni Octossini Boss',
   'Blueberrinni Crate',
 }
