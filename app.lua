@@ -1,6 +1,7 @@
 -- app.lua
--- WoodzHUB UI: presets wired (Weather / To Sahur), selection list w/ live coloring,
--- Auto-Farm toggle (streams target label), and a functional Options tab.
+-- WoodzHUB UI: robust (nil-safe) drag, working presets (Weather / To Sahur),
+-- selection list w/ live coloring, Auto-Farm toggle (streams target label),
+-- and a functional Options tab (merchants + crates).
 
 -- ------------- Sibling deps -------------
 local function getUtils()
@@ -156,25 +157,41 @@ local OptionsTabFrame = new("Frame", {
   Visible = false,
 }, MainFrame)
 
--- ------------- Dragging -------------
+-- ------------- Dragging (nil-safe) -------------
 do
-  local dragging, dragStart, startPos = false, nil, nil
+  local dragging = false
+  local dragStartPos : Vector2? = nil
+  local frameStartPos : UDim2? = nil
+
   local function begin(input)
     if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-      dragging, dragStart, startPos = true, input.Position, MainFrame.Position
+      dragging = true
+      dragStartPos = input.Position
+      frameStartPos = MainFrame.Position
     end
   end
+
   local function finish(input)
     if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
       dragging = false
+      dragStartPos = nil
+      frameStartPos = nil
     end
   end
+
   local function update(input)
-    if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
-      local delta = input.Position - dragStart
-      MainFrame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
-    end
+    if not dragging then return end
+    if not dragStartPos or not frameStartPos then return end
+    if input.UserInputType ~= Enum.UserInputType.MouseMovement and input.UserInputType ~= Enum.UserInputType.Touch then return end
+    local delta = input.Position - dragStartPos
+    MainFrame.Position = UDim2.new(
+      frameStartPos.X.Scale,
+      frameStartPos.X.Offset + delta.X,
+      frameStartPos.Y.Scale,
+      frameStartPos.Y.Offset + delta.Y
+    )
   end
+
   track(TitleLabel.InputBegan:Connect(begin))
   track(TitleLabel.InputEnded:Connect(finish))
   track(FrameBar.InputBegan:Connect(begin))
@@ -382,9 +399,10 @@ end
 farm.getMonsterModels()
 rebuildList()
 
--- search binding
+-- search binding (nil safe)
 track(SearchTextBox:GetPropertyChangedSignal("Text"):Connect(function()
-  farm.filterMonsterModels(SearchTextBox.Text)
+  local txt = SearchTextBox and SearchTextBox.Text or ""
+  farm.filterMonsterModels(txt or "")
   rebuildList()
 end))
 
@@ -398,15 +416,14 @@ end
 track(SelectWeatherButton.MouseButton1Click:Connect(function()
   ensureSelected("Weather Events")
   utils.notify("🌲 Preset", "Weather Events selected.", 3)
-  -- keep current search filter respected
-  farm.filterMonsterModels(SearchTextBox.Text)
+  farm.filterMonsterModels(SearchTextBox.Text or "")
   rebuildList()
 end))
 
 track(SelectSahurButton.MouseButton1Click:Connect(function()
   ensureSelected("To Sahur")
   utils.notify("🌲 Preset", "To Sahur selected.", 3)
-  farm.filterMonsterModels(SearchTextBox.Text)
+  farm.filterMonsterModels(SearchTextBox.Text or "")
   rebuildList()
 end))
 
@@ -415,14 +432,14 @@ track(SelectAllButton.MouseButton1Click:Connect(function()
   for _, n in ipairs(farm.getMonsterModels()) do table.insert(all, n) end
   farm.setSelected(all)
   utils.notify("🌲 Preset", "Selected all models.", 3)
-  farm.filterMonsterModels(SearchTextBox.Text)
+  farm.filterMonsterModels(SearchTextBox.Text or "")
   rebuildList()
 end))
 
 track(ClearAllButton.MouseButton1Click:Connect(function()
   farm.setSelected({})
   utils.notify("🌲 Preset", "Cleared all selections.", 3)
-  farm.filterMonsterModels(SearchTextBox.Text)
+  farm.filterMonsterModels(SearchTextBox.Text or "")
   rebuildList()
 end))
 
@@ -456,7 +473,6 @@ local merchant = nil
 local crates   = nil
 local antiAFK  = nil
 
--- lazy load when first used
 local function ensureMerchant()
   if not merchant then merchant = tryRequire("merchant") end
   return merchant
@@ -482,7 +498,6 @@ track(ToggleMerchant1Button.MouseButton1Click:Connect(function()
   local ok = false
   local mod = ensureMerchant()
   if mod and mod.toggleService then
-    -- serviceName, enabled
     ok = pcall(function() mod.toggleService("SmelterMerchantService", m1Enabled) end)
   end
   if not ok then
@@ -518,4 +533,4 @@ track(ToggleAutoCratesButton.MouseButton1Click:Connect(function()
 end))
 
 -- ------------- Finalize -------------
-utils.notify("🌲 WoodzHUB", "UI ready. Presets fixed; Options restored.", 4)
+utils.notify("🌲 WoodzHUB", "UI ready. Presets fixed; Options restored; drag hardened.", 4)
