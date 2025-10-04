@@ -1,7 +1,7 @@
--- farm.lua 
--- Auto-farm with robust hover that survives character swaps.
--- Weather Events ONLY have a 30s per-target timeout.
--- NEW: Non-weather mobs that don't lose HP for a short window are skipped.
+-- farm.lua
+-- Auto-farm with smooth constraint-based follow (no glide, no judder).
+-- Uses local data from data_monsters.lua (Weather / To Sahur / Forced).
+-- Weather Events: 30s timeout. Non-weather: skip if HP doesn't drop for 3s.
 
 -- 🔧 Utils + data
 local function getUtils()
@@ -11,9 +11,10 @@ local function getUtils()
   error("[farm.lua] utils missing; ensure init.lua injects siblings._deps.utils before loading farm.lua")
 end
 
-local utils = getUtils()
-local data  = require(script.Parent.data_monsters)  -- ⬅️ switched from constants to data
+local utils  = getUtils()
+local data   = require(script.Parent.data_monsters) -- <-- using your local data
 
+-- Services
 local Players           = game:GetService("Players")
 local Workspace         = game:GetService("Workspace")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -26,20 +27,25 @@ local M = {}
 ----------------------------------------------------------------------
 -- Config
 ----------------------------------------------------------------------
+local WEATHER_TIMEOUT               = 30   -- seconds (Weather Events only)
+local NON_WEATHER_STALL_TIMEOUT     = 3    -- seconds without HP decreasing → skip
+local ABOVE_OFFSET                  = Vector3.new(0, 20, 0)
 
-local WEATHER_TIMEOUT = 30 -- seconds (Weather Events only)
-local NON_WEATHER_STALL_TIMEOUT = 3 -- seconds without HP decreasing → skip
+-- Constraint tuning (adjust if you ever want snappier/slower follow)
+local POS_RESPONSIVENESS            = 200     -- higher = snappier
+local POS_MAX_FORCE                 = 1e9     -- plenty
+local ORI_RESPONSIVENESS            = 200
+local ORI_MAX_TORQUE                = 1e9
 
 ----------------------------------------------------------------------
 -- Selection/filter
 ----------------------------------------------------------------------
-
 local allMonsterModels = {}
 local filteredMonsterModels = {}
 local selectedMonsterModels = { "Weather Events" }
 
 local WEATHER_NAMES = (data and data.weatherEventModels) or {}
-local SAHUR_NAMES   = (data and data.toSahurModels) or {}
+local SAHUR_NAMES   = (data and data.toSahurModels)     or {}
 
 local function isWeatherName(name)
   local lname = string.lower(name or "")
@@ -74,11 +80,10 @@ end
 ----------------------------------------------------------------------
 -- Monster discovery / filtering
 ----------------------------------------------------------------------
-
 local function pushUnique(valid, name)
   if not name then return end
   for _, v in ipairs(valid) do if v == name then return end end
-  for _, s in ipairs(SAHUR_NAMES) do if s == name then return end end
+  for _, s in ipairs(SAHUR_NAMES)   do if s == name then return end end
   for _, w in ipairs(WEATHER_NAMES) do if w == name then return end end
   table.insert(valid, name)
 end
@@ -148,7 +153,6 @@ end
 ----------------------------------------------------------------------
 -- Enemy prioritization
 ----------------------------------------------------------------------
-
 local function refreshEnemyList()
   local wantWeather = table.find(selectedMonsterModels, "Weather Events") ~= nil
   local wantSahur   = table.find(selectedMonsterModels, "To Sahur") ~= nil
@@ -185,8 +189,7 @@ end
 ----------------------------------------------------------------------
 -- Remote
 ----------------------------------------------------------------------
-
-local autoAttackRemote = nil  -- ⬅️ ensure declared
+local autoAttackRemote = nil
 function M.setupAutoAttackRemote()
   autoAttackRemote = nil
   local ok, remote = pcall(function()
@@ -206,78 +209,8 @@ function M.setupAutoAttackRemote()
 end
 
 ----------------------------------------------------------------------
--- Hover rig (self-healing across character swaps/morphs)
-----------------------------------------------------------------------
-
-local HoverRig = {}
-HoverRig.__index = HoverRig
-
-function HoverRig.new()
-  local self = setmetatable({}, HoverRig)
-  self.bp = nil
-  self.currentChar = nil
-  self.currentHRP = nil
-
-  local function attachTo(char)
-    self.currentChar = char
-    self.currentHRP = char and char:FindFirstChild("HumanoidRootPart")
-    if self.currentHRP and self.bp then
-      self.bp.Parent = self.currentHRP
-    end
-  end
-
-  attachTo(player.Character or player.CharacterAdded:Wait())
-
-  self.charAddedConn = player.CharacterAdded:Connect(function(char)
-    char:WaitForChild("Humanoid", 5)
-    char:WaitForChild("HumanoidRootPart", 5)
-    attachTo(char)
-  end)
-
-  self.heartbeatConn = RunService.Heartbeat:Connect(function()
-    local ch = player.Character
-    if ch ~= self.currentChar then
-      attachTo(ch)
-      return
-    end
-    local hrp = ch and ch:FindFirstChild("HumanoidRootPart")
-    if hrp ~= self.currentHRP then
-      self.currentHRP = hrp
-      if hrp and self.bp then
-        self.bp.Parent = hrp
-      end
-    end
-  end)
-
-  return self
-end
-
-function HoverRig:ensure(position)
-  if not self.bp then
-    self.bp = Instance.new("BodyPosition")
-    self.bp.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
-    self.bp.D = 1000
-    self.bp.P = 10000
-    self.bp.Name = "WoodzHub_Hover"
-    if self.currentHRP then self.bp.Parent = self.currentHRP end
-  end
-  if position then self.bp.Position = position end
-end
-
-function HoverRig:set(pos)
-  if self.bp then self.bp.Position = pos end
-end
-
-function HoverRig:destroy()
-  if self.bp then self.bp:Destroy(); self.bp = nil end
-  if self.charAddedConn then self.charAddedConn:Disconnect(); self.charAddedConn = nil end
-  if self.heartbeatConn then self.heartbeatConn:Disconnect(); self.heartbeatConn = nil end
-end
-
-----------------------------------------------------------------------
 -- Helpers
 ----------------------------------------------------------------------
-
 local function isValidCFrame(cf)
   if not cf then return false end
   local p = cf.Position
@@ -298,17 +231,80 @@ local function findBasePart(model)
   return nil
 end
 
-----------------------------------------------------------------------
--- Public: run auto farm (Weather Events: 30s timeout; Non-weather HP stall skip)
-----------------------------------------------------------------------
+local function zeroVel(hrp)
+  pcall(function()
+    hrp.AssemblyLinearVelocity  = Vector3.zero
+    hrp.AssemblyAngularVelocity = Vector3.zero
+  end)
+end
 
+-- Single, glide-free hop with replication
+local function hardTeleport(cf)
+  local char = player.Character
+  if not char then return end
+  local hum = char:FindFirstChildOfClass("Humanoid")
+  local hrp = char:FindFirstChild("HumanoidRootPart")
+  if not hum or not hrp then return end
+  zeroVel(hrp)
+  local oldPS = hum.PlatformStand
+  hum.PlatformStand = true
+  char:PivotTo(cf)
+  RunService.Heartbeat:Wait()
+  hum.PlatformStand = oldPS
+end
+
+----------------------------------------------------------------------
+-- Smooth follow via constraints (created once per fight, cleaned each time)
+----------------------------------------------------------------------
+local function makeSmoothFollow(hrp)
+  -- attachments
+  local a0 = Instance.new("Attachment")
+  a0.Name = "WoodzHub_A0"
+  a0.Parent = hrp
+
+  -- AlignPosition
+  local ap = Instance.new("AlignPosition")
+  ap.Name = "WoodzHub_AP"
+  ap.Mode = Enum.PositionAlignmentMode.OneAttachment
+  ap.Attachment0 = a0
+  ap.ApplyAtCenterOfMass = true
+  ap.MaxForce = POS_MAX_FORCE
+  ap.Responsiveness = POS_RESPONSIVENESS
+  ap.RigidityEnabled = false
+  ap.Parent = hrp
+
+  -- AlignOrientation
+  local ao = Instance.new("AlignOrientation")
+  ao.Name = "WoodzHub_AO"
+  ao.Mode = Enum.OrientationAlignmentMode.OneAttachment
+  ao.Attachment0 = a0
+  ao.MaxTorque = ORI_MAX_TORQUE
+  ao.Responsiveness = ORI_RESPONSIVENESS
+  ao.RigidityEnabled = false
+  ao.Parent = hrp
+
+  -- controller API
+  local ctl = {}
+  function ctl:setGoal(cf)
+    ap.Position = cf.Position
+    ao.CFrame  = cf.Rotation
+  end
+  function ctl:destroy()
+    ap:Destroy()
+    ao:Destroy()
+    a0:Destroy()
+  end
+  return ctl
+end
+
+----------------------------------------------------------------------
+-- Public: run auto farm
+----------------------------------------------------------------------
 function M.runAutoFarm(flagGetter, setTargetText)
   if not autoAttackRemote then
     utils.notify("🌲 Auto-Farm", "RequestAttack RemoteFunction not found.", 5)
     return
   end
-
-  local hover = HoverRig.new()
 
   local function label(text)
     if setTargetText then setTargetText(text) end
@@ -320,14 +316,14 @@ function M.runAutoFarm(flagGetter, setTargetText)
     local hrp = character:FindFirstChild("HumanoidRootPart")
     if not hum or hum.Health <= 0 or not hrp then
       label("Current Target: None")
-      task.wait(0.1)
+      task.wait(0.05)
       continue
     end
 
     local enemies = refreshEnemyList()
     if #enemies == 0 then
       label("Current Target: None")
-      task.wait(0.25)
+      task.wait(0.1)
       continue
     end
 
@@ -338,65 +334,65 @@ function M.runAutoFarm(flagGetter, setTargetText)
       local eh = enemy:FindFirstChildOfClass("Humanoid")
       if not eh or eh.Health <= 0 then continue end
 
-      -- teleport near (streaming assist)
+      -- plan initial hop position
       local okPivot, pcf = pcall(function() return enemy:GetPivot() end)
-      local targetCF
-      if okPivot and isValidCFrame(pcf) then
-        targetCF = pcf * CFrame.new(0, 20, 0)
-      else
-        targetCF = nil
-      end
+      local targetCF = (okPivot and isValidCFrame(pcf)) and (pcf * CFrame.new(ABOVE_OFFSET)) or nil
       if not targetCF then continue end
 
-      pcall(function()
-        local ch = player.Character
-        if ch and ch:FindFirstChild("HumanoidRootPart") and ch:FindFirstChildOfClass("Humanoid") and ch.Humanoid.Health > 0 then
-          ch.HumanoidRootPart.CFrame = targetCF
-        end
-      end)
+      -- instant hop (replicated) — prevents glide
+      hardTeleport(targetCF)
 
-      task.wait(0.2)
+      -- reacquire bits after hop
+      character = player.Character
+      hum = character and character:FindFirstChildOfClass("Humanoid")
+      hrp = character and character:FindFirstChild("HumanoidRootPart")
+      if not character or not hum or not hrp then continue end
 
+      -- calm physics but keep replication
+      local oldPS = hum.PlatformStand
+      hum.PlatformStand = true
+      zeroVel(hrp)
+
+      -- constraint controller for smooth lock above target
+      local ctl = makeSmoothFollow(hrp)
+
+      -- resolve a concrete part to follow
       local targetPart = findBasePart(enemy)
       if not targetPart then
         local t0 = tick()
         repeat
-          task.wait(0.05)
+          RunService.Heartbeat:Wait()
           targetPart = findBasePart(enemy)
         until targetPart or (tick() - t0) > 2 or not enemy.Parent or eh.Health <= 0
       end
-      if not targetPart then continue end
+      if not targetPart then
+        hum.PlatformStand = oldPS
+        ctl:destroy()
+        continue
+      end
 
-      local cf = targetPart.CFrame * CFrame.new(0, 20, 0)
-      if not isValidCFrame(cf) then continue end
-
-      hover:ensure(cf.Position)
       label(("Current Target: %s (Health: %s)"):format(enemy.Name, math.floor(eh.Health)))
 
-      -- Track health to detect stalls (non-weather only)
-      local isWeather = isWeatherName(enemy.Name)
-      local lastHealth = eh.Health
-      local lastDropAt = tick()
+      -- timers for weather + stall
+      local isWeather   = isWeatherName(enemy.Name)
+      local lastHealth  = eh.Health
+      local lastDropAt  = tick()
+      local startedAt   = tick()
 
       local hcConn = eh.HealthChanged:Connect(function(h)
         label(("Current Target: %s (Health: %s)"):format(enemy.Name, math.floor(h)))
-        if h < lastHealth then
-          lastDropAt = tick()
-        end
+        if h < lastHealth then lastDropAt = tick() end
         lastHealth = h
       end)
 
-      local startedAt = tick()
-
+      -- attack loop
       while flagGetter() and enemy.Parent and eh.Health > 0 do
-        -- keep hovering above target (self-heals if HRP changes)
         local partNow = findBasePart(enemy) or targetPart
-        if partNow then
-          local cfNow = partNow.CFrame * CFrame.new(0, 20, 0)
-          if isValidCFrame(cfNow) then
-            hover:set(cfNow.Position)
-          end
-        end
+        if not partNow then break end
+
+        -- desired pose above enemy (smooth via constraints; no judder)
+        local desired = partNow.CFrame * CFrame.new(ABOVE_OFFSET)
+        ctl:setGoal(desired)
 
         -- attack
         local hrpTarget = enemy:FindFirstChild("HumanoidRootPart")
@@ -405,29 +401,36 @@ function M.runAutoFarm(flagGetter, setTargetText)
         end
 
         -- Weather-only timeout
-        if isWeather and (tick() - startedAt) > WEATHER_TIMEOUT then
+        local now = tick()
+        if isWeather and (now - startedAt) > WEATHER_TIMEOUT then
           utils.notify("🌲 Auto-Farm", ("Weather Event timeout on %s after %ds."):format(enemy.Name, WEATHER_TIMEOUT), 3)
           break
         end
 
-        -- Non-weather stall detection: if HP hasn't dropped for a while, skip
-        if not isWeather and (tick() - lastDropAt) > NON_WEATHER_STALL_TIMEOUT then
+        -- Non-weather stall detection
+        if not isWeather and (now - lastDropAt) > NON_WEATHER_STALL_TIMEOUT then
           utils.notify("🌲 Auto-Farm", ("Skipping %s (no HP change for %0.1fs)"):format(enemy.Name, NON_WEATHER_STALL_TIMEOUT), 3)
           break
         end
 
-        task.wait(0.1)
+        RunService.Heartbeat:Wait()
       end
 
       if hcConn then hcConn:Disconnect() end
       label("Current Target: None")
-      task.wait(0.05) -- small breather
+
+      -- cleanup + restore
+      ctl:destroy()
+      if hum and hum.Parent then
+        hum.PlatformStand = oldPS
+        zeroVel(hrp)
+      end
+
+      RunService.Heartbeat:Wait()
     end
 
-    task.wait(0.1)
+    RunService.Heartbeat:Wait()
   end
-
-  hover:destroy()
 end
 
 return M
