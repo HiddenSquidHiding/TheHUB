@@ -1,7 +1,7 @@
 -- data_monsters.lua
-local M = {}
+local M = {
 
-M.toSahurModels = {
+toSahurModels = {
   'To To To To To To To To To To To To To To To Sahur',
   'To To To To To To To To To To To To To To Sahur',
   'To To To To To To To To To To To To To Sahur',
@@ -13,7 +13,7 @@ M.toSahurModels = {
   'To To To To To To To Sahur',
 }
 
-M.weatherEventModels = {
+weatherEventModels = {
   'Chicleteira','YONII','Coccodrillo Cheese','Chachechchachachachi',
   'CanneIIoni Dragoni','GALALTUS MEDUS','Hipopotamino Supermakretino',
   'Market Crate','BOSS','MALAME AMARALE BOSS','Malame Crate','Las Vaquitas',
@@ -22,7 +22,7 @@ M.weatherEventModels = {
   'Blueberrinni Crate',
 }
 
-M.forcedMonsters = {
+forcedMonsters = {
   'Apple','Void Apple','Golden Apple','Golden Void Apple','Chick','Orange','Bull',
   'Brrr Brr Patapim','Acorn','Lirili LariIa','Trash Bag','Red Panda','Tire','Rhino',
   'Totem','Trippi Troppi Tropa Trippa','Box','Cacto Hipopootamo',
@@ -40,6 +40,6 @@ M.forcedMonsters = {
   'Dar Dir Durr Dorr TeIur Dadar','Tirilikalika TiriIikalako','BambercIat Crococlat',
   'TigrIIi Grapefrutunni','Brick','BuIbito Bandito Traktorito','Gangster Footeera',
   'Screw','BOSS','Tiny Stars',
+  }
 }
-
 return M
