@@ -1,10 +1,6 @@
 -- farm.lua
--- Auto-farm with smooth, no-glide movement:
---  • Instant hop using single PivotTo (no glide).
---  • During attack: locally Lerp HRP to target each frame for visual smoothness,
---    and periodically PivotTo to keep server in sync (hits register).
---  • Weather Events: 30s timeout.
---  • Non-weather: skip if HP doesn't drop for 3s.
+-- Auto-farm with smooth constraint-based follow (no glide, no judder).
+-- Weather Events: 30s timeout. Non-weather: skip if HP doesn't drop for 3s.
 
 -- 🔧 Utils + constants
 local function getUtils()
@@ -31,12 +27,13 @@ local M = {}
 ----------------------------------------------------------------------
 local WEATHER_TIMEOUT               = 30   -- seconds (Weather Events only)
 local NON_WEATHER_STALL_TIMEOUT     = 3    -- seconds without HP decreasing → skip
+local ABOVE_OFFSET                  = Vector3.new(0, 20, 0)
 
--- Smooth-lock tuning
-local CLIENT_LERP_ALPHA             = 0.35 -- 0..1; higher = snappier, lower = smoother
-local SERVER_SYNC_INTERVAL          = 0.25 -- seconds; periodic PivotTo cadence
-local DRIFT_SYNC_DIST               = 3.0  -- studs; if client vs target > this → immediate PivotTo
-local ABOVE_OFFSET                  = Vector3.new(0, 20, 0) -- hover offset above target part
+-- Constraint tuning (adjust if you ever want snappier/slower follow)
+local POS_RESPONSIVENESS            = 200     -- higher = snappier
+local POS_MAX_FORCE                 = 1e9     -- plenty
+local ORI_RESPONSIVENESS            = 200
+local ORI_MAX_TORQUE                = 1e9
 
 ----------------------------------------------------------------------
 -- Selection/filter
@@ -253,9 +250,49 @@ local function hardTeleport(cf)
   hum.PlatformStand = oldPS
 end
 
--- Distance between two CFrames (position only)
-local function dist(cfA, cfB)
-  return (cfA.Position - cfB.Position).Magnitude
+----------------------------------------------------------------------
+-- Smooth follow via constraints (created once per fight, cleaned each time)
+----------------------------------------------------------------------
+local function makeSmoothFollow(hrp)
+  -- attachments
+  local a0 = Instance.new("Attachment")
+  a0.Name = "WoodzHub_A0"
+  a0.Parent = hrp
+
+  -- AlignPosition
+  local ap = Instance.new("AlignPosition")
+  ap.Name = "WoodzHub_AP"
+  ap.Mode = Enum.PositionAlignmentMode.OneAttachment
+  ap.Attachment0 = a0
+  ap.ApplyAtCenterOfMass = true
+  ap.MaxForce = POS_MAX_FORCE
+  ap.Responsiveness = POS_RESPONSIVENESS
+  ap.RigidityEnabled = false
+  ap.Parent = hrp
+
+  -- AlignOrientation
+  local ao = Instance.new("AlignOrientation")
+  ao.Name = "WoodzHub_AO"
+  ao.Mode = Enum.OrientationAlignmentMode.OneAttachment
+  ao.Attachment0 = a0
+  ao.MaxTorque = ORI_MAX_TORQUE
+  ao.Responsiveness = ORI_RESPONSIVENESS
+  ao.RigidityEnabled = false
+  ao.Parent = hrp
+
+  -- controller API
+  local ctl = {}
+  function ctl:setGoal(cf)
+    -- Use goal position/orientation without second attachment
+    ap.Position = cf.Position
+    ao.CFrame = cf.Rotation
+  end
+  function ctl:destroy()
+    ap:Destroy()
+    ao:Destroy()
+    a0:Destroy()
+  end
+  return ctl
 end
 
 ----------------------------------------------------------------------
@@ -295,26 +332,29 @@ function M.runAutoFarm(flagGetter, setTargetText)
       local eh = enemy:FindFirstChildOfClass("Humanoid")
       if not eh or eh.Health <= 0 then continue end
 
-      -- Plan initial hop position
+      -- plan initial hop position
       local okPivot, pcf = pcall(function() return enemy:GetPivot() end)
       local targetCF = (okPivot and isValidCFrame(pcf)) and (pcf * CFrame.new(ABOVE_OFFSET)) or nil
       if not targetCF then continue end
 
-      -- Instant hop (replicated)
+      -- instant hop (replicated)
       hardTeleport(targetCF)
 
-      -- Reacquire bits
+      -- reacquire bits
       character = player.Character
       hum = character and character:FindFirstChildOfClass("Humanoid")
       hrp = character and character:FindFirstChild("HumanoidRootPart")
       if not character or not hum or not hrp then continue end
 
-      -- Calm physics but keep replication
+      -- calm physics but keep replication
       local oldPS = hum.PlatformStand
       hum.PlatformStand = true
       zeroVel(hrp)
 
-      -- Resolve concrete part to follow
+      -- make smooth controller (constraints)
+      local ctl = makeSmoothFollow(hrp)
+
+      -- resolve a concrete part to follow
       local targetPart = findBasePart(enemy)
       if not targetPart then
         local t0 = tick()
@@ -325,17 +365,17 @@ function M.runAutoFarm(flagGetter, setTargetText)
       end
       if not targetPart then
         hum.PlatformStand = oldPS
+        ctl:destroy()
         continue
       end
 
       label(("Current Target: %s (Health: %s)"):format(enemy.Name, math.floor(eh.Health)))
 
-      -- Timers for weather + stall; server sync cadence
+      -- timers for weather + stall
       local isWeather   = isWeatherName(enemy.Name)
       local lastHealth  = eh.Health
       local lastDropAt  = tick()
       local startedAt   = tick()
-      local lastSync    = 0
 
       local hcConn = eh.HealthChanged:Connect(function(h)
         label(("Current Target: %s (Health: %s)"):format(enemy.Name, math.floor(h)))
@@ -343,42 +383,23 @@ function M.runAutoFarm(flagGetter, setTargetText)
         lastHealth = h
       end)
 
-      -- Attack loop
+      -- attack loop
       while flagGetter() and enemy.Parent and eh.Health > 0 do
         local partNow = findBasePart(enemy) or targetPart
         if not partNow then break end
 
-        -- Desired target pose above enemy
+        -- desired pose above enemy (smoothly driven by constraints)
         local desired = partNow.CFrame * CFrame.new(ABOVE_OFFSET)
+        ctl:setGoal(desired)
 
-        -- Smooth client-side move (visual, no jitter)
-        local cur = hrp.CFrame
-        local smooth = cur:Lerp(desired, CLIENT_LERP_ALPHA)
-        pcall(function()
-          -- re-acquire HRP if a morph replaced it mid-fight
-          local curHRP = character:FindFirstChild("HumanoidRootPart")
-          if curHRP ~= hrp and curHRP then
-            hrp = curHRP
-            zeroVel(hrp)
-          end
-          hrp.CFrame = smooth
-        end)
-
-        -- Periodic server sync or if drift got large
-        local now = tick()
-        if (now - lastSync) >= SERVER_SYNC_INTERVAL or dist(cur, desired) > DRIFT_SYNC_DIST then
-          zeroVel(hrp)
-          character:PivotTo(desired) -- replicated; keeps hits valid
-          lastSync = now
-        end
-
-        -- Attack
+        -- attack
         local hrpTarget = enemy:FindFirstChild("HumanoidRootPart")
         if hrpTarget and autoAttackRemote then
           pcall(function() autoAttackRemote:InvokeServer(hrpTarget.CFrame) end)
         end
 
         -- Weather-only timeout
+        local now = tick()
         if isWeather and (now - startedAt) > WEATHER_TIMEOUT then
           utils.notify("🌲 Auto-Farm", ("Weather Event timeout on %s after %ds."):format(enemy.Name, WEATHER_TIMEOUT), 3)
           break
@@ -396,7 +417,8 @@ function M.runAutoFarm(flagGetter, setTargetText)
       if hcConn then hcConn:Disconnect() end
       label("Current Target: None")
 
-      -- Restore humanoid state
+      -- cleanup + restore
+      ctl:destroy()
       if hum and hum.Parent then
         hum.PlatformStand = oldPS
         zeroVel(hrp)
