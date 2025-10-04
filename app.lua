@@ -1,7 +1,8 @@
 -- app.lua
--- Top-level wiring for UI <-> features
+-- Minimal app that wires preset buttons (Weather / To Sahur), selection list,
+-- search filter, and Auto-Farm with live target label.
 
--- 🔧 Safer access to injected utils (no require(nil))
+-- Sibling deps
 local function getUtils()
   local p = script and script.Parent
   if p and p._deps and p._deps.utils then return p._deps.utils end
@@ -11,280 +12,448 @@ end
 
 local utils      = getUtils()
 local constants  = require(script.Parent.constants)
-local uiModule   = require(script.Parent.ui)
 local farm       = require(script.Parent.farm)
-local merchants  = require(script.Parent.merchants)
-local crates     = require(script.Parent.crates)
-local antiAFK    = require(script.Parent.anti_afk)
-local smartFarm  = require(script.Parent.smart_target)
 
--- ✅ Needed for MonsterInfo lookup
-local ReplicatedStorage = game:GetService('ReplicatedStorage')
+-- Roblox services
+local Players    = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
 
-local app = {}
+local player     = Players.LocalPlayer
+local PlayerGui  = player:WaitForChild("PlayerGui")
 
--- State flags
-local autoFarmEnabled      = false
-local smartFarmEnabled     = false
-local autoBuyM1Enabled     = false
-local autoBuyM2Enabled     = false
-local autoOpenCratesEnabled= false
-local antiAfkEnabled       = false
+----------------------------------------------------------------------
+-- Colors / layout (match your previous style)
+----------------------------------------------------------------------
+local COLOR_BG_DARK     = Color3.fromRGB(30, 30, 30)
+local COLOR_BG          = Color3.fromRGB(40, 40, 40)
+local COLOR_BG_MED      = Color3.fromRGB(50, 50, 50)
+local COLOR_BTN         = Color3.fromRGB(60, 60, 60)
+local COLOR_BTN_ACTIVE  = Color3.fromRGB(80, 80, 80)
+local COLOR_WHITE       = Color3.fromRGB(255, 255, 255)
 
--- UI refs (populated in start)
-local UI = nil
+local SIZE_MAIN = UDim2.new(0, 400, 0, 540)
+local SIZE_MIN  = UDim2.new(0, 400, 0, 50)
 
-local function notifyToggle(name, on, extra)
-  extra = extra or ''
-  local msg = on and (name .. ' enabled' .. extra) or (name .. ' disabled')
-  utils.notify('🌲 ' .. name, msg, 3.5)
-end
-
-local function setAutoFarmUI(on)
-  UI.AutoFarmToggle.Text = 'Auto-Farm: '..(on and 'ON' or 'OFF')
-  UI.AutoFarmToggle.BackgroundColor3 = on and constants.COLOR_BTN_ACTIVE or constants.COLOR_BTN
-end
-local function setSmartFarmUI(on)
-  UI.SmartFarmToggle.Text = 'Smart Farm: '..(on and 'ON' or 'OFF')
-  UI.SmartFarmToggle.BackgroundColor3 = on and constants.COLOR_BTN_ACTIVE or constants.COLOR_BTN
-end
-
--- 🔍 Resolve ReplicatedStorage MonsterInfo in several common locations
-local function resolveMonsterInfo()
-  local RS = ReplicatedStorage
-  local candidatePaths = {
-    {"GameInfo","MonsterInfo"},     -- << your path
-    {"MonsterInfo"},
-    {"Shared","MonsterInfo"},
-    {"Modules","MonsterInfo"},
-    {"Configs","MonsterInfo"},
-  }
-
-  -- Try listed paths (with short WaitForChild fallback)
-  for _, path in ipairs(candidatePaths) do
-    local node = RS
-    local ok = true
-    for i, name in ipairs(path) do
-      node = node:FindFirstChild(name) or node:WaitForChild(name, 1)
-      if not node then ok = false; break end
-    end
-    if ok and node and node:IsA("ModuleScript") then
-      return node
+local function new(t, props, parent)
+  local i = Instance.new(t)
+  if props then
+    for k, v in pairs(props) do
+      i[k] = v
     end
   end
-
-  -- Last resort: scan descendants for a ModuleScript named "MonsterInfo"
-  for _, d in ipairs(RS:GetDescendants()) do
-    if d:IsA("ModuleScript") and d.Name == "MonsterInfo" then
-      return d
-    end
+  if parent then
+    i.Parent = parent
   end
-  return nil
+  return i
 end
 
-function app.start()
-  UI = uiModule.build()
+local uiConns = {}
+local function track(conn)
+  table.insert(uiConns, conn)
+  return conn
+end
 
-  ------------------------------------------------------------------
-  -- Build model list, search, presets
-  ------------------------------------------------------------------
-  farm.getMonsterModels()
-  local function rebuildModelButtons()
-    for _, ch in ipairs(UI.ModelScrollFrame:GetChildren()) do
-      if ch:IsA('TextButton') then ch:Destroy() end
+----------------------------------------------------------------------
+-- Root GUI
+----------------------------------------------------------------------
+local ScreenGui = new("ScreenGui", {
+  Name = "WoodzHUB",
+  ResetOnSpawn = false,
+  ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+  DisplayOrder = 999999999,
+  Enabled = true,
+}, PlayerGui)
+
+local MainFrame = new("Frame", {
+  Size = SIZE_MAIN,
+  Position = UDim2.new(0.5, -200, 0.5, -270),
+  BackgroundColor3 = COLOR_BG_DARK,
+  BorderSizePixel = 0,
+}, ScreenGui)
+
+local TitleLabel = new("TextLabel", {
+  Size = UDim2.new(1, -60, 0, 50),
+  BackgroundColor3 = COLOR_BG_MED,
+  Text = "🌲 WoodzHUB",
+  TextColor3 = COLOR_WHITE,
+  TextSize = 14,
+  Font = Enum.Font.SourceSansBold,
+}, MainFrame)
+
+local FrameBar = new("Frame", {
+  Size = UDim2.new(0, 60, 0, 50),
+  Position = UDim2.new(1, -60, 0, 0),
+  BackgroundColor3 = COLOR_BG_MED,
+}, MainFrame)
+
+local MinimizeButton = new("TextButton", {
+  Size = UDim2.new(0.333, 0, 1, 0),
+  BackgroundColor3 = COLOR_BTN,
+  TextColor3 = COLOR_WHITE,
+  Text = "-",
+  TextSize = 14,
+  Font = Enum.Font.SourceSans,
+}, FrameBar)
+
+local MaximizeButton = new("TextButton", {
+  Size = UDim2.new(0.333, 0, 1, 0),
+  Position = UDim2.new(0.333, 0, 0, 0),
+  BackgroundColor3 = COLOR_BTN,
+  TextColor3 = COLOR_WHITE,
+  Text = "□",
+  TextSize = 14,
+  Font = Enum.Font.SourceSans,
+  Visible = false,
+}, FrameBar)
+
+local CloseButton = new("TextButton", {
+  Size = UDim2.new(0.333, 0, 1, 0),
+  Position = UDim2.new(0.666, 0, 0, 0),
+  BackgroundColor3 = Color3.fromRGB(200, 50, 50),
+  TextColor3 = COLOR_WHITE,
+  Text = "X",
+  TextSize = 14,
+  Font = Enum.Font.SourceSans,
+}, FrameBar)
+
+local TabFrame = new("Frame", {
+  Size = UDim2.new(1, 0, 0, 30),
+  Position = UDim2.new(0, 0, 0, 50),
+  BackgroundColor3 = COLOR_BG,
+}, MainFrame)
+
+local MainTabButton = new("TextButton", {
+  Size = UDim2.new(0.5, 0, 1, 0),
+  Text = "Main",
+  TextColor3 = COLOR_WHITE,
+  BackgroundColor3 = COLOR_BTN,
+  TextSize = 14,
+  Font = Enum.Font.SourceSans,
+}, TabFrame)
+
+local OptionsTabButton = new("TextButton", {
+  Size = UDim2.new(0.5, 0, 1, 0),
+  Position = UDim2.new(0.5, 0, 0, 0),
+  Text = "Options",
+  TextColor3 = COLOR_WHITE,
+  BackgroundColor3 = COLOR_BG,
+  TextSize = 14,
+  Font = Enum.Font.SourceSans,
+}, TabFrame)
+
+local MainTabFrame = new("Frame", {
+  Size = UDim2.new(1, 0, 1, -80),
+  Position = UDim2.new(0, 0, 0, 80),
+  BackgroundTransparency = 1,
+}, MainFrame)
+
+local OptionsTabFrame = new("Frame", {
+  Size = UDim2.new(1, 0, 1, -80),
+  Position = UDim2.new(0, 0, 0, 80),
+  BackgroundTransparency = 1,
+  Visible = false,
+}, MainFrame)
+
+----------------------------------------------------------------------
+-- Dragging
+----------------------------------------------------------------------
+do
+  local dragging, dragStart, startPos = false, nil, nil
+  local function begin(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+      dragging, dragStart, startPos = true, input.Position, MainFrame.Position
     end
-    local models = farm.getFiltered()
-    local count = 0
-    for _, name in ipairs(models) do
-      local btn = utils.new('TextButton', {
-        Size = UDim2.new(1, -10, 0, 30),
-        BackgroundColor3 = farm.isSelected(name) and constants.COLOR_BTN_ACTIVE or constants.COLOR_BTN,
-        TextColor3 = constants.COLOR_WHITE,
-        Text = name,
-        TextSize = 14,
-        Font = Enum.Font.SourceSans,
-        LayoutOrder = count,
-      }, UI.ModelScrollFrame)
-      utils.track(btn.MouseButton1Click:Connect(function()
-        farm.toggleSelect(name)
-        btn.BackgroundColor3 = farm.isSelected(name) and constants.COLOR_BTN_ACTIVE or constants.COLOR_BTN
-      end))
-      count += 1
-    end
-    UI.ModelScrollFrame.CanvasSize = UDim2.new(0,0,0,count * 30)
   end
-  local function applySearchFilter(text)
-    farm.filterMonsterModels(text or '')
-    rebuildModelButtons()
+  local function finish(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+      dragging = false
+    end
   end
-  applySearchFilter('')
-  utils.track(UI.SearchTextBox:GetPropertyChangedSignal('Text'):Connect(function()
-    applySearchFilter(UI.SearchTextBox.Text)
-  end))
-  utils.track(UI.SelectSahurButton.MouseButton1Click:Connect(function()
-    local sel = farm.getSelected()
-    if not table.find(sel, 'To Sahur') then
-      sel = table.clone(sel); table.insert(sel, 'To Sahur'); farm.setSelected(sel); rebuildModelButtons()
-      utils.notify('🌲 Preset', 'Selected all To Sahur models.', 3)
+  local function update(input)
+    if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+      local delta = input.Position - dragStart
+      MainFrame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
     end
-  end))
-  utils.track(UI.SelectWeatherButton.MouseButton1Click:Connect(function()
-    local sel = farm.getSelected()
-    if not table.find(sel, 'Weather Events') then
-      sel = table.clone(sel); table.insert(sel, 'Weather Events'); farm.setSelected(sel); rebuildModelButtons()
-      utils.notify('🌲 Preset', 'Selected all Weather Events models.', 3)
-    end
-  end))
-  utils.track(UI.SelectAllButton.MouseButton1Click:Connect(function()
-    farm.setSelected(table.clone(farm.getMonsterModels()))
-    rebuildModelButtons()
-    utils.notify('🌲 Preset', 'Selected all models.', 3)
-  end))
-  utils.track(UI.ClearAllButton.MouseButton1Click:Connect(function()
-    farm.setSelected({})
-    rebuildModelButtons()
-    utils.notify('🌲 Preset', 'Cleared all selections.', 3)
-  end))
+  end
+  track(TitleLabel.InputBegan:Connect(begin))
+  track(TitleLabel.InputEnded:Connect(finish))
+  track(FrameBar.InputBegan:Connect(begin))
+  track(FrameBar.InputEnded:Connect(finish))
+  track(UserInputService.InputChanged:Connect(update))
+end
 
-  ------------------------------------------------------------------
-  -- Auto-Farm (mutually exclusive with Smart Farm)
-  ------------------------------------------------------------------
-  utils.track(UI.AutoFarmToggle.MouseButton1Click:Connect(function()
-    local newState = not autoFarmEnabled
+----------------------------------------------------------------------
+-- Min/Max/Close
+----------------------------------------------------------------------
+local isMinimized = false
+local function minimize()
+  isMinimized = true
+  MainFrame.Size = SIZE_MIN
+  TabFrame.Visible = false
+  MainTabFrame.Visible = false
+  OptionsTabFrame.Visible = false
+  MinimizeButton.Visible = false
+  MaximizeButton.Visible = true
+end
+local function maximize()
+  isMinimized = false
+  MainFrame.Size = SIZE_MAIN
+  TabFrame.Visible = true
+  -- restore whichever tab is active
+  MainTabFrame.Visible = MainTabButton.BackgroundColor3 == COLOR_BTN
+  OptionsTabFrame.Visible = OptionsTabButton.BackgroundColor3 == COLOR_BTN
+  MinimizeButton.Visible = true
+  MaximizeButton.Visible = false
+end
+track(MinimizeButton.MouseButton1Click:Connect(minimize))
+track(MaximizeButton.MouseButton1Click:Connect(maximize))
+track(CloseButton.MouseButton1Click:Connect(function()
+  ScreenGui:Destroy()
+end))
 
-    if newState and smartFarmEnabled then
-      smartFarmEnabled = false
-      setSmartFarmUI(false)
-      notifyToggle('Smart Farm', false)
-    end
+----------------------------------------------------------------------
+-- Tabs
+----------------------------------------------------------------------
+local function gotoMain()
+  if isMinimized then return end
+  MainTabButton.BackgroundColor3 = COLOR_BTN
+  OptionsTabButton.BackgroundColor3 = COLOR_BG
+  MainTabFrame.Visible = true
+  OptionsTabFrame.Visible = false
+end
+local function gotoOptions()
+  if isMinimized then return end
+  MainTabButton.BackgroundColor3 = COLOR_BG
+  OptionsTabButton.BackgroundColor3 = COLOR_BTN
+  MainTabFrame.Visible = false
+  OptionsTabFrame.Visible = true
+end
+track(MainTabButton.MouseButton1Click:Connect(gotoMain))
+track(OptionsTabButton.MouseButton1Click:Connect(gotoOptions))
 
-    autoFarmEnabled = newState
-    setAutoFarmUI(autoFarmEnabled)
-    if autoFarmEnabled then
-      farm.setupAutoAttackRemote()
-      local sel = farm.getSelected()
-      notifyToggle('Auto-Farm', true, sel and #sel>0 and (' for: '..table.concat(sel, ', ')) or '')
-      task.spawn(function()
-        farm.runAutoFarm(function() return autoFarmEnabled end, function(t) UI.CurrentTargetLabel.Text = t end)
+----------------------------------------------------------------------
+-- MAIN TAB UI
+----------------------------------------------------------------------
+local SearchTextBox = new("TextBox", {
+  Size = UDim2.new(1, -20, 0, 30),
+  Position = UDim2.new(0, 10, 0, 10),
+  BackgroundColor3 = COLOR_BG_MED,
+  TextColor3 = COLOR_WHITE,
+  PlaceholderText = "Enter model names to search...",
+  TextSize = 14,
+  Font = Enum.Font.SourceSans,
+  Text = "",
+  ClearTextOnFocus = false,
+}, MainTabFrame)
+
+local ModelScrollFrame = new("ScrollingFrame", {
+  Size = UDim2.new(1, -20, 0, 150),
+  Position = UDim2.new(0, 10, 0, 50),
+  BackgroundColor3 = COLOR_BG_MED,
+  CanvasSize = UDim2.new(0, 0, 0, 0),
+  ScrollBarThickness = 8,
+}, MainTabFrame)
+new("UIListLayout", { SortOrder = Enum.SortOrder.LayoutOrder }, ModelScrollFrame)
+
+local PresetButtonsFrame = new("Frame", {
+  Size = UDim2.new(1, -20, 0, 30),
+  Position = UDim2.new(0, 10, 0, 210),
+  BackgroundTransparency = 1,
+}, MainTabFrame)
+
+local SelectSahurButton = new("TextButton", {
+  Size = UDim2.new(0.25, 0, 1, 0),
+  BackgroundColor3 = COLOR_BTN,
+  TextColor3 = COLOR_WHITE,
+  Text = "Select To Sahur",
+  TextSize = 14,
+  Font = Enum.Font.SourceSans,
+}, PresetButtonsFrame)
+
+local SelectWeatherButton = new("TextButton", {
+  Size = UDim2.new(0.25, 0, 1, 0),
+  Position = UDim2.new(0.25, 0, 0, 0),
+  BackgroundColor3 = COLOR_BTN,
+  TextColor3 = COLOR_WHITE,
+  Text = "Select Weather",
+  TextSize = 14,
+  Font = Enum.Font.SourceSans,
+}, PresetButtonsFrame)
+
+local SelectAllButton = new("TextButton", {
+  Size = UDim2.new(0.25, 0, 1, 0),
+  Position = UDim2.new(0.50, 0, 0, 0),
+  BackgroundColor3 = COLOR_BTN,
+  TextColor3 = COLOR_WHITE,
+  Text = "Select All",
+  TextSize = 14,
+  Font = Enum.Font.SourceSans,
+}, PresetButtonsFrame)
+
+local ClearAllButton = new("TextButton", {
+  Size = UDim2.new(0.25, 0, 1, 0),
+  Position = UDim2.new(0.75, 0, 0, 0),
+  BackgroundColor3 = COLOR_BTN,
+  TextColor3 = COLOR_WHITE,
+  Text = "Clear All",
+  TextSize = 14,
+  Font = Enum.Font.SourceSans,
+}, PresetButtonsFrame)
+
+local AutoFarmToggle = new("TextButton", {
+  Size = UDim2.new(1, -20, 0, 30),
+  Position = UDim2.new(0, 10, 0, 250),
+  BackgroundColor3 = COLOR_BTN,
+  TextColor3 = COLOR_WHITE,
+  Text = "Auto-Farm: OFF",
+  TextSize = 14,
+  Font = Enum.Font.SourceSans,
+}, MainTabFrame)
+
+local CurrentTargetLabel = new("TextLabel", {
+  Size = UDim2.new(1, -20, 0, 30),
+  Position = UDim2.new(0, 10, 0, 290),
+  BackgroundColor3 = COLOR_BG_MED,
+  TextColor3 = COLOR_WHITE,
+  Text = "Current Target: None",
+  TextSize = 14,
+  Font = Enum.Font.SourceSans,
+}, MainTabFrame)
+
+----------------------------------------------------------------------
+-- OPTIONS TAB UI (placeholder for your other toggles)
+----------------------------------------------------------------------
+new("TextLabel", {
+  Size = UDim2.new(1, -20, 0, 30),
+  Position = UDim2.new(0, 10, 0, 10),
+  BackgroundTransparency = 1,
+  TextColor3 = COLOR_WHITE,
+  Text = "Options coming soon…",
+  TextSize = 14,
+  Font = Enum.Font.SourceSans,
+  TextXAlignment = Enum.TextXAlignment.Left,
+}, OptionsTabFrame)
+
+----------------------------------------------------------------------
+-- Data + List binding
+----------------------------------------------------------------------
+local function applyButtonColor(btn, isSelected)
+  btn.BackgroundColor3 = isSelected and COLOR_BTN_ACTIVE or COLOR_BTN
+end
+
+local function rebuildList()
+  -- clear old
+  for _, ch in ipairs(ModelScrollFrame:GetChildren()) do
+    if ch:IsA("TextButton") then ch:Destroy() end
+  end
+
+  local items = farm.getFiltered()
+  local y = 0
+  for idx, name in ipairs(items) do
+    local btn = new("TextButton", {
+      Size = UDim2.new(1, -10, 0, 30),
+      BackgroundColor3 = COLOR_BTN,
+      TextColor3 = COLOR_WHITE,
+      Text = name,
+      TextSize = 14,
+      Font = Enum.Font.SourceSans,
+      LayoutOrder = idx,
+    }, ModelScrollFrame)
+
+    applyButtonColor(btn, farm.isSelected(name))
+
+    track(btn.MouseButton1Click:Connect(function()
+      farm.toggleSelect(name)
+      applyButtonColor(btn, farm.isSelected(name))
+    end))
+
+    y += 30
+  end
+  ModelScrollFrame.CanvasSize = UDim2.new(0, 0, 0, y)
+end
+
+-- initial populate
+farm.getMonsterModels()
+rebuildList()
+
+-- search binding
+track(SearchTextBox:GetPropertyChangedSignal("Text"):Connect(function()
+  farm.filterMonsterModels(SearchTextBox.Text)
+  rebuildList()
+end))
+
+----------------------------------------------------------------------
+-- Presets wiring (this is what was missing)
+----------------------------------------------------------------------
+track(SelectWeatherButton.MouseButton1Click:Connect(function()
+  if not farm.isSelected("Weather Events") then
+    local selected = farm.getSelected()
+    table.insert(selected, "Weather Events")
+    farm.setSelected(selected)
+    utils.notify("🌲 Preset", "Selected all Weather Events models.", 3)
+    rebuildList()
+  else
+    utils.notify("🌲 Preset", "Weather Events already selected.", 3)
+  end
+end))
+
+track(SelectSahurButton.MouseButton1Click:Connect(function()
+  if not farm.isSelected("To Sahur") then
+    local selected = farm.getSelected()
+    table.insert(selected, "To Sahur")
+    farm.setSelected(selected)
+    utils.notify("🌲 Preset", "Selected all To Sahur models.", 3)
+    rebuildList()
+  else
+    utils.notify("🌲 Preset", "To Sahur already selected.", 3)
+  end
+end))
+
+track(SelectAllButton.MouseButton1Click:Connect(function()
+  local all = {}
+  for _, n in ipairs(farm.getMonsterModels()) do table.insert(all, n) end
+  farm.setSelected(all)
+  utils.notify("🌲 Preset", "Selected all models.", 3)
+  rebuildList()
+end))
+
+track(ClearAllButton.MouseButton1Click:Connect(function()
+  farm.setSelected({})
+  utils.notify("🌲 Preset", "Cleared all selections.", 3)
+  rebuildList()
+end))
+
+----------------------------------------------------------------------
+-- Auto-Farm toggle
+----------------------------------------------------------------------
+local autoFarmEnabled = false
+
+-- give farm its RemoteFunction
+farm.setupAutoAttackRemote()
+
+track(AutoFarmToggle.MouseButton1Click:Connect(function()
+  autoFarmEnabled = not autoFarmEnabled
+  AutoFarmToggle.Text = "Auto-Farm: " .. (autoFarmEnabled and "ON" or "OFF")
+  AutoFarmToggle.BackgroundColor3 = autoFarmEnabled and COLOR_BTN_ACTIVE or COLOR_BTN
+
+  if autoFarmEnabled then
+    utils.notify("🌲 Auto-Farm", "Enabled. Weather Events prioritized.", 3)
+    task.spawn(function()
+      farm.runAutoFarm(function() return autoFarmEnabled end, function(txt)
+        -- live target updates
+        CurrentTargetLabel.Text = txt or "Current Target: None"
       end)
-    else
-      UI.CurrentTargetLabel.Text = 'Current Target: None'
-      notifyToggle('Auto-Farm', false)
-    end
-  end))
-
-  ------------------------------------------------------------------
-  -- Smart Farm (mutually exclusive with Auto-Farm)
-  ------------------------------------------------------------------
-  utils.track(UI.SmartFarmToggle.MouseButton1Click:Connect(function()
-    local newState = not smartFarmEnabled
-
-    if newState and autoFarmEnabled then
+      -- when it exits, normalize the toggle if the loop stopped for any reason
+      AutoFarmToggle.Text = "Auto-Farm: OFF"
+      AutoFarmToggle.BackgroundColor3 = COLOR_BTN
       autoFarmEnabled = false
-      setAutoFarmUI(false)
-      notifyToggle('Auto-Farm', false)
-    end
+    end)
+  else
+    utils.notify("🌲 Auto-Farm", "Disabled.", 3)
+  end
+end))
 
-    smartFarmEnabled = newState
-    setSmartFarmUI(smartFarmEnabled)
-    if smartFarmEnabled then
-      -- ✅ Use robust resolver (supports ReplicatedStorage.GameInfo.MonsterInfo)
-      local module = resolveMonsterInfo()
-      notifyToggle('Smart Farm', true, module and (' — using '..module:GetFullName()) or ' (MonsterInfo not found; will stop)')
-      if module then
-        task.spawn(function()
-          smartFarm.runSmartFarm(
-  function() return smartFarmEnabled end,
-  function(txt) UI.CurrentTargetLabel.Text = txt end,
-  {
-    module = resolveMonsterInfo(),
-    safetyBuffer = 0.8,
-    refreshInterval = 0.05,
-    debug = true, -- <- will print your DAMAGE and HEALTH sources/values
-  }
-)
-        end)
-      else
-        smartFarmEnabled = false
-        setSmartFarmUI(false)
-      end
-    else
-      UI.CurrentTargetLabel.Text = 'Current Target: None'
-      notifyToggle('Smart Farm', false)
-    end
-  end))
-
-  ------------------------------------------------------------------
-  -- Anti-AFK
-  ------------------------------------------------------------------
-  utils.track(UI.ToggleAntiAFKButton.MouseButton1Click:Connect(function()
-    antiAfkEnabled = not antiAfkEnabled
-    if antiAfkEnabled then antiAFK.enable() else antiAFK.disable() end
-    UI.ToggleAntiAFKButton.Text = 'Anti-AFK: '..(antiAfkEnabled and 'ON' or 'OFF')
-    UI.ToggleAntiAFKButton.BackgroundColor3 = antiAfkEnabled and constants.COLOR_BTN_ACTIVE or constants.COLOR_BTN
-    notifyToggle('Anti-AFK', antiAfkEnabled)
-  end))
-
-  ------------------------------------------------------------------
-  -- Merchants
-  ------------------------------------------------------------------
-  utils.track(UI.ToggleMerchant1Button.MouseButton1Click:Connect(function()
-    autoBuyM1Enabled = not autoBuyM1Enabled
-    UI.ToggleMerchant1Button.Text = 'Auto Buy Mythics (Chicleteiramania): '..(autoBuyM1Enabled and 'ON' or 'OFF')
-    UI.ToggleMerchant1Button.BackgroundColor3 = autoBuyM1Enabled and constants.COLOR_BTN_ACTIVE or constants.COLOR_BTN
-    if autoBuyM1Enabled then
-      notifyToggle('Merchant — Chicleteiramania', true)
-      task.spawn(function()
-        merchants.autoBuyLoop('SmelterMerchantService', function() return autoBuyM1Enabled end, function(sfx)
-          UI.ToggleMerchant1Button.Text = 'Auto Buy Mythics (Chicleteiramania): ON '..sfx
-        end)
-      end)
-    else
-      notifyToggle('Merchant — Chicleteiramania', false)
-    end
-  end))
-
-  utils.track(UI.ToggleMerchant2Button.MouseButton1Click:Connect(function()
-    autoBuyM2Enabled = not autoBuyM2Enabled
-    UI.ToggleMerchant2Button.Text = 'Auto Buy Mythics (Bombardino Sewer): '..(autoBuyM2Enabled and 'ON' or 'OFF')
-    UI.ToggleMerchant2Button.BackgroundColor3 = autoBuyM2Enabled and constants.COLOR_BTN_ACTIVE or constants.COLOR_BTN
-    if autoBuyM2Enabled then
-      notifyToggle('Merchant — Bombardino Sewer', true)
-      task.spawn(function()
-        merchants.autoBuyLoop('SmelterMerchantService2', function() return autoBuyM2Enabled end, function(sfx)
-          UI.ToggleMerchant2Button.Text = 'Auto Buy Mythics (Bombardino Sewer): ON '..sfx
-        end)
-      end)
-    else
-      notifyToggle('Merchant — Bombardino Sewer', false)
-    end
-  end))
-
-  ------------------------------------------------------------------
-  -- Auto Crates
-  ------------------------------------------------------------------
-  utils.track(UI.ToggleAutoCratesButton.MouseButton1Click:Connect(function()
-    autoOpenCratesEnabled = not autoOpenCratesEnabled
-    UI.ToggleAutoCratesButton.Text = 'Auto Open Crates: '..(autoOpenCratesEnabled and 'ON' or 'OFF')
-    UI.ToggleAutoCratesButton.BackgroundColor3 = autoOpenCratesEnabled and constants.COLOR_BTN_ACTIVE or constants.COLOR_BTN
-    if autoOpenCratesEnabled then
-      crates.refreshCrateInventory(true)
-      notifyToggle('Crates', true, (' (1 every '..tostring(constants.crateOpenDelay or 1)..'s)'))
-      task.spawn(function() crates.autoOpenCratesEnabledLoop(function() return autoOpenCratesEnabled end) end)
-    else
-      notifyToggle('Crates', false)
-    end
-  end))
-
-  ------------------------------------------------------------------
-  -- Close button
-  ------------------------------------------------------------------
-  utils.track(UI.CloseButton.MouseButton1Click:Connect(function()
-    autoFarmEnabled=false; smartFarmEnabled=false; autoBuyM1Enabled=false; autoBuyM2Enabled=false; autoOpenCratesEnabled=false
-    if antiAfkEnabled then antiAFK.disable(); antiAfkEnabled=false end
-    utils.notify('🌲 WoodzHUB', 'Closed. All loops stopped and UI removed.', 3.5)
-    if UI.ScreenGui and UI.ScreenGui.Parent then UI.ScreenGui:Destroy() end
-  end))
-end
-
-return app
+----------------------------------------------------------------------
+-- Done
+----------------------------------------------------------------------
+utils.notify("🌲 WoodzHUB", "UI ready. Preset buttons now wired.", 4)
