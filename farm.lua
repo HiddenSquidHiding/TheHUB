@@ -1,59 +1,98 @@
 -- farm.lua
--- Robust auto-farm:
--- - Fuzzy name matching for Weather / To Sahur (case/space tolerant, substring ok)
--- - Immediate retarget on selection change (forceRetarget)
--- - Smooth follow (no glide/judder), hard teleports between targets
--- - Weather timeout + non-weather HP-stall skip
+-- Auto-farm that pulls groups from data_monsters.lua (preferred) and
+-- falls back to constants.lua only if data_monsters is missing.
+-- Keeps: fuzzy name matching; immediate retarget on selection change;
+-- smooth follow + hard teleports; weather timeout; non-weather stall skip.
 
--- ==== utils/consts ====
+-- ==== utils / loader ====
 local function getUtils()
   local p = script and script.Parent
   if p and p._deps and p._deps.utils then return p._deps.utils end
   if rawget(getfenv(), "__WOODZ_UTILS") then return __WOODZ_UTILS end
   error("[farm.lua] utils missing; ensure init.lua injects siblings._deps.utils before loading farm.lua")
 end
+local utils = getUtils()
 
-local utils      = getUtils()
-local constants  = require(script.Parent.constants)
+local function tryRequire(name)
+  local parent = script and script.Parent
+  if parent and parent._deps and parent._deps[name] then
+    return parent._deps[name]
+  end
+  if parent then
+    local child = parent:FindFirstChild(name)
+    if child then
+      local ok, mod = pcall(require, child)
+      if ok then return mod end
+    end
+  end
+  local g = rawget(getfenv(), "__WOODZ_" .. string.upper(name))
+  if g then return g end
+  return nil
+end
 
+-- Prefer data_monsters (GitHub file), fallback to constants
+local DATA = tryRequire("data_monsters")
+local CONST = tryRequire("constants")
+if not DATA and not CONST then
+  error("[farm.lua] Neither data_monsters.lua nor constants.lua found")
+end
+
+-- ==== Services ====
 local Players           = game:GetService("Players")
 local Workspace         = game:GetService("Workspace")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService        = game:GetService("RunService")
-
 local player = Players.LocalPlayer
 
 local M = {}
 
--- ==== config ====
-local WEATHER_TIMEOUT            = 30  -- seconds (only for Weather Events)
-local NON_WEATHER_STALL_TIMEOUT  = 3   -- seconds with no HP drop = skip
+-- ==== Config ====
+local WEATHER_TIMEOUT            = 30   -- seconds (Weather Events only)
+local NON_WEATHER_STALL_TIMEOUT  = 3    -- seconds without HP drop → skip
 local ABOVE_OFFSET               = Vector3.new(0, 20, 0)
 
--- Constraints
+-- Constraint tuning
 local POS_RESPONSIVENESS         = 200
 local POS_MAX_FORCE              = 1e9
 local ORI_RESPONSIVENESS         = 200
 local ORI_MAX_TORQUE             = 1e9
 
--- ==== selection/filter ====
+-- ==== Data source helpers ====
+local function getWeatherList()
+  return (DATA and DATA.weatherEventModels)
+      or (CONST and CONST.weatherEventModels)
+      or {}
+end
+local function getSahurList()
+  return (DATA and DATA.toSahurModels)
+      or (CONST and CONST.toSahurModels)
+      or {}
+end
+local function getForcedList()
+  return (DATA and DATA.forcedMonsters)
+      or (CONST and CONST.forcedMonsters)
+      or {}
+end
+
+-- Keep copies (so lists are stable if data module mutates later)
+local WEATHER_NAMES = table.clone(getWeatherList())
+local SAHUR_NAMES   = table.clone(getSahurList())
+local FORCED_NAMES  = table.clone(getForcedList())
+
+-- ==== Selection / filter state ====
 local allMonsterModels      = {}
 local filteredMonsterModels = {}
 local selectedMonsterModels = { "Weather Events" }
 
-local WEATHER_NAMES = constants.weatherEventModels or {}
-local SAHUR_NAMES   = constants.toSahurModels or {}
-
 local function norm(s)
   s = tostring(s or "")
   s = s:lower()
-  s = s:gsub("[%s%p]+", " ")       -- collapse punctuation/spaces to single space
+  s = s:gsub("[%s%p]+", " ")        -- collapse punctuation+spaces
   s = s:gsub("^%s+", ""):gsub("%s+$", "")
   return s
 end
 
 local function matchInList(list, name)
-  -- Accept exact or substring >= 3 chars to tolerate small variations.
   local ln = norm(name)
   for _, v in ipairs(list) do
     local lv = norm(v)
@@ -73,15 +112,16 @@ function M.setSelected(list)
 end
 function M.toggleSelect(name)
   local i = table.find(selectedMonsterModels, name)
-  if i then table.remove(selectedMonsterModels, i) else table.insert(selectedMonsterModels, name) end
+  if i then table.remove(selectedMonsterModels, i)
+  else table.insert(selectedMonsterModels, name) end
 end
 function M.isSelected(name) return table.find(selectedMonsterModels, name) ~= nil end
 
--- Retarget nudge that the UI can call
+-- UI nudge: ask loop to re-evaluate instantly
 local _retargetFlag = 0
 function M.forceRetarget() _retargetFlag = tick() end
 
--- ==== discovery/filtering ====
+-- ==== Discovery / filtering ====
 local function pushUnique(valid, name)
   if not name then return end
   for _, v in ipairs(valid) do if v == name then return end end
@@ -92,17 +132,20 @@ end
 
 function M.getMonsterModels()
   local valid = {}
+  -- live scan of Workspace
   for _, node in ipairs(Workspace:GetDescendants()) do
     if node:IsA("Model") and not Players:GetPlayerFromCharacter(node) then
       local hum = node:FindFirstChildOfClass("Humanoid")
       if hum and hum.Health > 0 then pushUnique(valid, node.Name) end
     end
   end
-  if constants.forcedMonsters then
-    for _, nm in ipairs(constants.forcedMonsters) do pushUnique(valid, nm) end
-  end
+  -- forced (always show)
+  for _, nm in ipairs(FORCED_NAMES) do pushUnique(valid, nm) end
+
+  -- group sentinels
   table.insert(valid, "To Sahur")
   table.insert(valid, "Weather Events")
+
   table.sort(valid)
   allMonsterModels      = valid
   filteredMonsterModels = table.clone(valid)
@@ -115,9 +158,12 @@ function M.filterMonsterModels(text)
   text = tostring(text or ""):lower()
   local filtered = {}
   local function matchesAny(list)
-    for _, n in ipairs(list) do if n:lower():find(text, 1, true) then return true end end
+    for _, n in ipairs(list) do
+      if n:lower():find(text, 1, true) then return true end
+    end
     return false
   end
+
   if text == "" then
     filtered = allMonsterModels
   else
@@ -131,6 +177,7 @@ function M.filterMonsterModels(text)
       end
     end
   end
+
   table.sort(filtered)
   if #filtered == 0 then
     utils.notify("🌲 Search", "No models found; showing all.", 3)
@@ -140,7 +187,7 @@ function M.filterMonsterModels(text)
   return filtered
 end
 
--- ==== prioritization ====
+-- ==== Prioritization ====
 local function refreshEnemyList()
   local wantWeather = table.find(selectedMonsterModels, "Weather Events") ~= nil
   local wantSahur   = table.find(selectedMonsterModels, "To Sahur") ~= nil
@@ -156,10 +203,9 @@ local function refreshEnemyList()
       local h = node:FindFirstChildOfClass("Humanoid")
       if h and h.Health > 0 then
         local nm = node.Name
-        local lname = nm:lower()
         if wantWeather and isWeatherName(nm) then
           table.insert(weather, node)
-        elseif explicitSet[lname] then
+        elseif explicitSet[nm:lower()] then
           table.insert(explicit, node)
         elseif wantSahur and isSahurName(nm) then
           table.insert(sahur, node)
@@ -175,7 +221,7 @@ local function refreshEnemyList()
   return out
 end
 
--- ==== remote ====
+-- ==== Remote ====
 local autoAttackRemote
 function M.setupAutoAttackRemote()
   autoAttackRemote = nil
@@ -195,7 +241,7 @@ function M.setupAutoAttackRemote()
   end
 end
 
--- ==== helpers ====
+-- ==== Helpers ====
 local function isValidCFrame(cf)
   if not cf then return false end
   local p = cf.Position
@@ -246,7 +292,7 @@ local function makeSmoothFollow(hrp)
   ap.RigidityEnabled = false; ap.Parent = hrp
 
   local ao = Instance.new("AlignOrientation"); ao.Name = "WoodzHub_AO"
-  ao.Mode = Enum.OrientationAlignmentMode.OneAttachment
+  ao.Mode = Enum.orientationAlignmentMode.OneAttachment or Enum.OrientationAlignmentMode.OneAttachment
   ao.Attachment0 = a0
   ao.MaxTorque = ORI_MAX_TORQUE; ao.Responsiveness = ORI_RESPONSIVENESS
   ao.RigidityEnabled = false; ao.Parent = hrp
@@ -257,7 +303,7 @@ local function makeSmoothFollow(hrp)
   return ctl
 end
 
--- ==== main loop ====
+-- ==== Main loop ====
 function M.runAutoFarm(flagGetter, setTargetText)
   if not autoAttackRemote then
     utils.notify("🌲 Auto-Farm", "RequestAttack RemoteFunction not found.", 5)
