@@ -22,6 +22,9 @@ local M = {
     "Trippi Troppi Troppa Trippa Boss2",
     "Blueberrinni Octossini Boss",
     "Blueberrinni Crate",
+    "Los CrocodiIIitos",
+    "Crocodillitos Crate",
+    "Pipi Kiwi Boss",
   },
 
   toSahurModels = {
@@ -122,6 +125,7 @@ local M = {
     "Screw",
     "BOSS",
     "Tiny Stars",
+    "Tri Tri Tri Tri Sarur",
   },
 }
 
