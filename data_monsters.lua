@@ -1,16 +1,16 @@
 -- data_monsters.lua
 return {
   toSahurModels = {
-    "Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Sahur",
-    "Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Sahur",
-    "Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Sahur",
-    "Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Sahur",
-    "Tri Tri Tri Tri Tri Tri Tri Tri Tri Sahur",
-    "Tri Tri Tri Tri Tri Tri Tri Tri Sahur",
-    "Tri Tri Tri Tri Tri Tri Tri Sahur",
-    "Tri Tri Tri Tri Tri Tri Sahur",
-    "Tri Tri Tri Tri Tri Sahur",
-    "Tri Tri Tri Sahur",
+    "Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Sarur",
+    "Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Sarur",
+    "Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Sarur",
+    "Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Sarur",
+    "Tri Tri Tri Tri Tri Tri Tri Tri Tri Sarur",
+    "Tri Tri Tri Tri Tri Tri Tri Tri Sarur",
+    "Tri Tri Tri Tri Tri Tri Tri Sarur",
+    "Tri Tri Tri Tri Tri Tri Sarur",
+    "Tri Tri Tri Tri Tri Sarur",
+    "Tri Tri Tri Sarur",
   },
 
   weatherEventModels = {
