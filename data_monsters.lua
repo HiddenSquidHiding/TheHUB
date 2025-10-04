@@ -1,10 +1,20 @@
 -- data_monsters.lua
--- Central place for monster group definitions used by farm.lua
+local M = {}
 
-local M = {
-  -- These are examples/placeholders — replace with your actual lists.
-  weatherEventModels = {
-    -- e.g.
+toSahurModels = {
+    "Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Sahur",
+    "Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Sahur",
+    "Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Sahur",
+    "Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Sahur",
+    "Tri Tri Tri Tri Tri Tri Tri Tri Tri Sahur",
+    "Tri Tri Tri Tri Tri Tri Tri Tri Sahur",
+    "Tri Tri Tri Tri Tri Tri Tri Sahur",
+    "Tri Tri Tri Tri Tri Tri Sahur",
+    "Tri Tri Tri Tri Tri Sahur",
+    "Tri Tri Tri Sahur",
+}
+
+weatherEventModels = {
     "Chicleteira",
     "YONII",
     "Coccodrillo Cheese",
@@ -25,24 +35,9 @@ local M = {
     "Los CrocodiIIitos",
     "Crocodillitos Crate",
     "Pipi Kiwi Boss",
-  },
+}
 
-  toSahurModels = {
-    -- e.g.
-    "Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Sahur",
-    "Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Sahur",
-    "Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Sahur",
-    "Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Sahur",
-    "Tri Tri Tri Tri Tri Tri Tri Tri Tri Sahur",
-    "Tri Tri Tri Tri Tri Tri Tri Tri Sahur",
-    "Tri Tri Tri Tri Tri Tri Tri Sahur",
-    "Tri Tri Tri Tri Tri Tri Sahur",
-    "Tri Tri Tri Tri Tri Sahur",
-    "Tri Tri Tri Sahur",
-  },
-
-  -- Optional: always show these in the list even if not currently spawned
-  forcedMonsters = {
+forcedMonsters = {
     "Apple",
     "Void Apple",
     "Golden Apple",
@@ -147,7 +142,6 @@ local M = {
     "Los CrocodiIIitos",
     "Crocodillitos Crate",
     "Pipi Kiwi Boss",
-  },
 }
 
 return M
