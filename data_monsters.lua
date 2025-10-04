@@ -29,15 +29,16 @@ local M = {
 
   toSahurModels = {
     -- e.g.
-    "To To To To To To To To To To To To To To To Sahur",
-    "To To To To To To To To To To To To To To Sahur",
-    "To To To To To To To To To To To To To Sahur",
-    "To To To To To To To To To To To To Sahur",
-    "To To To To To To To To To To To Sahur",
-    "To To To To To To To To To To Sahur",
-    "To To To To To To To To To Sahur",
-    "To To To To To To To To Sahur",
-    "To To To To To To To Sahur",
+    "Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Sahur",
+    "Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Sahur",
+    "Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Sahur",
+    "Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Sahur",
+    "Tri Tri Tri Tri Tri Tri Tri Tri Tri Sahur",
+    "Tri Tri Tri Tri Tri Tri Tri Tri Sahur",
+    "Tri Tri Tri Tri Tri Tri Tri Sahur",
+    "Tri Tri Tri Tri Tri Tri Sahur",
+    "Tri Tri Tri Tri Tri Sahur",
+    "Tri Tri Tri Sahur",
   },
 
   -- Optional: always show these in the list even if not currently spawned
