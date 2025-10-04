@@ -1,20 +1,19 @@
 -- app.lua
--- WoodzHUB UI: presets poke farm.forceRetarget() so attacking starts immediately;
--- Options tab uses _deps-aware module lookup (no false "missing" toasts).
+-- UI: preset clicks now nudge farm (forceRetarget); module lookup prefers _deps;
+-- drag hardened (no '.start'); Options tab restored.
 
--- ====== Sibling deps ======
+-- ====== deps ======
 local function getUtils()
   local p = script and script.Parent
   if p and p._deps and p._deps.utils then return p._deps.utils end
   if rawget(getfenv(), "__WOODZ_UTILS") then return __WOODZ_UTILS end
   error("[app.lua] utils missing; ensure init.lua injects siblings._deps.utils before loading app.lua")
 end
-
 local utils      = getUtils()
 local constants  = require(script.Parent.constants)
 local farm       = require(script.Parent.farm)
 
--- Optional modules (loader-aware)
+-- Loader-aware optional requires
 local function tryRequire(name)
   local parent = script and script.Parent
   if parent and parent._deps and parent._deps[name] then
@@ -27,29 +26,16 @@ local function tryRequire(name)
       if ok then return mod end
     end
   end
-  -- also allow globals like __WOODZ_MERCHANT etc if your loader sets them
   local g = rawget(getfenv(), "__WOODZ_" .. string.upper(name))
   if g then return g end
   return nil
 end
 
--- ====== Services ======
+-- ====== services/ui helpers ======
 local Players          = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
-
 local player    = Players.LocalPlayer
 local PlayerGui = player:WaitForChild("PlayerGui")
-
--- ====== Styling ======
-local COLOR_BG_DARK     = Color3.fromRGB(30, 30, 30)
-local COLOR_BG          = Color3.fromRGB(40, 40, 40)
-local COLOR_BG_MED      = Color3.fromRGB(50, 50, 50)
-local COLOR_BTN         = Color3.fromRGB(60, 60, 60)
-local COLOR_BTN_ACTIVE  = Color3.fromRGB(80, 80, 80)
-local COLOR_WHITE       = Color3.fromRGB(255, 255, 255)
-
-local SIZE_MAIN = UDim2.new(0, 400, 0, 540)
-local SIZE_MIN  = UDim2.new(0, 400, 0, 50)
 
 local function new(t, props, parent)
   local i = Instance.new(t)
@@ -57,11 +43,20 @@ local function new(t, props, parent)
   if parent then i.Parent = parent end
   return i
 end
-
 local uiConns = {}
 local function track(c) table.insert(uiConns, c); return c end
 
--- ====== Root GUI ======
+-- Colors/sizing
+local COLOR_BG_DARK     = Color3.fromRGB(30,30,30)
+local COLOR_BG          = Color3.fromRGB(40,40,40)
+local COLOR_BG_MED      = Color3.fromRGB(50,50,50)
+local COLOR_BTN         = Color3.fromRGB(60,60,60)
+local COLOR_BTN_ACTIVE  = Color3.fromRGB(80,80,80)
+local COLOR_WHITE       = Color3.fromRGB(255,255,255)
+local SIZE_MAIN         = UDim2.new(0,400,0,540)
+local SIZE_MIN          = UDim2.new(0,400,0,50)
+
+-- ====== root gui ======
 local ScreenGui = new("ScreenGui", {
   Name = "WoodzHUB",
   ResetOnSpawn = false,
@@ -72,13 +67,13 @@ local ScreenGui = new("ScreenGui", {
 
 local MainFrame = new("Frame", {
   Size = SIZE_MAIN,
-  Position = UDim2.new(0.5, -200, 0.5, -270),
+  Position = UDim2.new(0.5,-200,0.5,-270),
   BackgroundColor3 = COLOR_BG_DARK,
   BorderSizePixel = 0,
 }, ScreenGui)
 
 local TitleLabel = new("TextLabel", {
-  Size = UDim2.new(1, -60, 0, 50),
+  Size = UDim2.new(1,-60,0,50),
   BackgroundColor3 = COLOR_BG_MED,
   Text = "🌲 WoodzHUB",
   TextColor3 = COLOR_WHITE,
@@ -87,107 +82,40 @@ local TitleLabel = new("TextLabel", {
 }, MainFrame)
 
 local FrameBar = new("Frame", {
-  Size = UDim2.new(0, 60, 0, 50),
-  Position = UDim2.new(1, -60, 0, 0),
+  Size = UDim2.new(0,60,0,50),
+  Position = UDim2.new(1,-60,0,0),
   BackgroundColor3 = COLOR_BG_MED,
 }, MainFrame)
 
-local MinimizeButton = new("TextButton", {
-  Size = UDim2.new(0.333, 0, 1, 0),
-  BackgroundColor3 = COLOR_BTN,
-  TextColor3 = COLOR_WHITE,
-  Text = "-",
-  TextSize = 14,
-  Font = Enum.Font.SourceSans,
-}, FrameBar)
+local MinimizeButton = new("TextButton", { Size = UDim2.new(0.333,0,1,0), BackgroundColor3 = COLOR_BTN, TextColor3 = COLOR_WHITE, Text = "-", TextSize = 14, Font = Enum.Font.SourceSans }, FrameBar)
+local MaximizeButton = new("TextButton", { Size = UDim2.new(0.333,0,1,0), Position = UDim2.new(0.333,0,0,0), BackgroundColor3 = COLOR_BTN, TextColor3 = COLOR_WHITE, Text = "□", TextSize = 14, Font = Enum.Font.SourceSans, Visible = false }, FrameBar)
+local CloseButton    = new("TextButton", { Size = UDim2.new(0.333,0,1,0), Position = UDim2.new(0.666,0,0,0), BackgroundColor3 = Color3.fromRGB(200,50,50), TextColor3 = COLOR_WHITE, Text = "X", TextSize = 14, Font = Enum.Font.SourceSans }, FrameBar)
 
-local MaximizeButton = new("TextButton", {
-  Size = UDim2.new(0.333, 0, 1, 0),
-  Position = UDim2.new(0.333, 0, 0, 0),
-  BackgroundColor3 = COLOR_BTN,
-  TextColor3 = COLOR_WHITE,
-  Text = "□",
-  TextSize = 14,
-  Font = Enum.Font.SourceSans,
-  Visible = false,
-}, FrameBar)
+local TabFrame = new("Frame", { Size = UDim2.new(1,0,0,30), Position = UDim2.new(0,0,0,50), BackgroundColor3 = COLOR_BG }, MainFrame)
+local MainTabButton    = new("TextButton", { Size = UDim2.new(0.5,0,1,0), Text = "Main", TextColor3 = COLOR_WHITE, BackgroundColor3 = COLOR_BTN, TextSize = 14, Font = Enum.Font.SourceSans }, TabFrame)
+local OptionsTabButton = new("TextButton", { Size = UDim2.new(0.5,0,1,0), Position = UDim2.new(0.5,0,0,0), Text = "Options", TextColor3 = COLOR_WHITE, BackgroundColor3 = COLOR_BG, TextSize = 14, Font = Enum.Font.SourceSans }, TabFrame)
 
-local CloseButton = new("TextButton", {
-  Size = UDim2.new(0.333, 0, 1, 0),
-  Position = UDim2.new(0.666, 0, 0, 0),
-  BackgroundColor3 = Color3.fromRGB(200, 50, 50),
-  TextColor3 = COLOR_WHITE,
-  Text = "X",
-  TextSize = 14,
-  Font = Enum.Font.SourceSans,
-}, FrameBar)
+local MainTabFrame    = new("Frame", { Size = UDim2.new(1,0,1,-80), Position = UDim2.new(0,0,0,80), BackgroundTransparency = 1 }, MainFrame)
+local OptionsTabFrame = new("Frame", { Size = UDim2.new(1,0,1,-80), Position = UDim2.new(0,0,0,80), BackgroundTransparency = 1, Visible = false }, MainFrame)
 
-local TabFrame = new("Frame", {
-  Size = UDim2.new(1, 0, 0, 30),
-  Position = UDim2.new(0, 0, 0, 50),
-  BackgroundColor3 = COLOR_BG,
-}, MainFrame)
-
-local MainTabButton = new("TextButton", {
-  Size = UDim2.new(0.5, 0, 1, 0),
-  Text = "Main",
-  TextColor3 = COLOR_WHITE,
-  BackgroundColor3 = COLOR_BTN,
-  TextSize = 14,
-  Font = Enum.Font.SourceSans,
-}, TabFrame)
-
-local OptionsTabButton = new("TextButton", {
-  Size = UDim2.new(0.5, 0, 1, 0),
-  Position = UDim2.new(0.5, 0, 0, 0),
-  Text = "Options",
-  TextColor3 = COLOR_WHITE,
-  BackgroundColor3 = COLOR_BG,
-  TextSize = 14,
-  Font = Enum.Font.SourceSans,
-}, TabFrame)
-
-local MainTabFrame = new("Frame", {
-  Size = UDim2.new(1, 0, 1, -80),
-  Position = UDim2.new(0, 0, 0, 80),
-  BackgroundTransparency = 1,
-}, MainFrame)
-
-local OptionsTabFrame = new("Frame", {
-  Size = UDim2.new(1, 0, 1, -80),
-  Position = UDim2.new(0, 0, 0, 80),
-  BackgroundTransparency = 1,
-  Visible = false,
-}, MainFrame)
-
--- ====== Dragging (nil-safe) ======
+-- drag (nil-safe; no '.start')
 do
-  local dragging = false
-  local startMouse : Vector2? = nil
-  local startPos   : UDim2?   = nil
-
+  local dragging, startMouse, startPos = false, nil, nil
   local function begin(input)
     if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-      dragging = true
-      startMouse = input.Position
-      startPos   = MainFrame.Position
+      dragging = true; startMouse = input.Position; startPos = MainFrame.Position
     end
   end
   local function finish(input)
     if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-      dragging = false
-      startMouse = nil
-      startPos   = nil
+      dragging = false; startMouse = nil; startPos = nil
     end
   end
   local function update(input)
     if not dragging or not startMouse or not startPos then return end
     if input.UserInputType ~= Enum.UserInputType.MouseMovement and input.UserInputType ~= Enum.UserInputType.Touch then return end
-    local delta = input.Position - startMouse
-    MainFrame.Position = UDim2.new(
-      startPos.X.Scale, startPos.X.Offset + delta.X,
-      startPos.Y.Scale, startPos.Y.Offset + delta.Y
-    )
+    local d = input.Position - startMouse
+    MainFrame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X, startPos.Y.Scale, startPos.Y.Offset + d.Y)
   end
   track(TitleLabel.InputBegan:Connect(begin))
   track(TitleLabel.InputEnded:Connect(finish))
@@ -196,7 +124,7 @@ do
   track(UserInputService.InputChanged:Connect(update))
 end
 
--- ====== Min/Max/Close ======
+-- min/max/close
 local isMinimized = false
 local function minimize()
   isMinimized = true
@@ -211,7 +139,7 @@ local function maximize()
   isMinimized = false
   MainFrame.Size = SIZE_MAIN
   TabFrame.Visible = true
-  MainTabFrame.Visible = MainTabButton.BackgroundColor3 == COLOR_BTN
+  MainTabFrame.Visible  = MainTabButton.BackgroundColor3 == COLOR_BTN
   OptionsTabFrame.Visible = OptionsTabButton.BackgroundColor3 == COLOR_BTN
   MinimizeButton.Visible = true
   MaximizeButton.Visible = false
@@ -220,227 +148,137 @@ track(MinimizeButton.MouseButton1Click:Connect(minimize))
 track(MaximizeButton.MouseButton1Click:Connect(maximize))
 track(CloseButton.MouseButton1Click:Connect(function() ScreenGui:Destroy() end))
 
--- ====== Tabs ======
 local function gotoMain()
   if isMinimized then return end
-  MainTabButton.BackgroundColor3   = COLOR_BTN
+  MainTabButton.BackgroundColor3 = COLOR_BTN
   OptionsTabButton.BackgroundColor3 = COLOR_BG
   MainTabFrame.Visible, OptionsTabFrame.Visible = true, false
 end
 local function gotoOptions()
   if isMinimized then return end
-  MainTabButton.BackgroundColor3   = COLOR_BG
+  MainTabButton.BackgroundColor3 = COLOR_BG
   OptionsTabButton.BackgroundColor3 = COLOR_BTN
   MainTabFrame.Visible, OptionsTabFrame.Visible = false, true
 end
 track(MainTabButton.MouseButton1Click:Connect(gotoMain))
 track(OptionsTabButton.MouseButton1Click:Connect(gotoOptions))
 
--- ====== MAIN TAB UI ======
+-- ====== MAIN tab controls ======
 local SearchTextBox = new("TextBox", {
-  Size = UDim2.new(1, -20, 0, 30),
-  Position = UDim2.new(0, 10, 0, 10),
-  BackgroundColor3 = COLOR_BG_MED,
-  TextColor3 = COLOR_WHITE,
-  PlaceholderText = "Enter model names to search...",
-  TextSize = 14,
-  Font = Enum.Font.SourceSans,
-  Text = "",
-  ClearTextOnFocus = false,
+  Size = UDim2.new(1,-20,0,30), Position = UDim2.new(0,10,0,10),
+  BackgroundColor3 = COLOR_BG_MED, TextColor3 = COLOR_WHITE,
+  PlaceholderText = "Enter model names to search...", TextSize = 14,
+  Font = Enum.Font.SourceSans, Text = "", ClearTextOnFocus = false,
 }, MainTabFrame)
 
 local ModelScrollFrame = new("ScrollingFrame", {
-  Size = UDim2.new(1, -20, 0, 150),
-  Position = UDim2.new(0, 10, 0, 50),
-  BackgroundColor3 = COLOR_BG_MED,
-  CanvasSize = UDim2.new(0, 0, 0, 0),
+  Size = UDim2.new(1,-20,0,150), Position = UDim2.new(0,10,0,50),
+  BackgroundColor3 = COLOR_BG_MED, CanvasSize = UDim2.new(0,0,0,0),
   ScrollBarThickness = 8,
 }, MainTabFrame)
 new("UIListLayout", { SortOrder = Enum.SortOrder.LayoutOrder }, ModelScrollFrame)
 
-local PresetButtonsFrame = new("Frame", {
-  Size = UDim2.new(1, -20, 0, 30),
-  Position = UDim2.new(0, 10, 0, 210),
-  BackgroundTransparency = 1,
-}, MainTabFrame)
+local PresetButtonsFrame = new("Frame", { Size = UDim2.new(1,-20,0,30), Position = UDim2.new(0,10,0,210), BackgroundTransparency = 1 }, MainTabFrame)
 
-local SelectSahurButton = new("TextButton", {
-  Size = UDim2.new(0.25, 0, 1, 0),
-  BackgroundColor3 = COLOR_BTN,
-  TextColor3 = COLOR_WHITE,
-  Text = "Select To Sahur",
-  TextSize = 14,
-  Font = Enum.Font.SourceSans,
-}, PresetButtonsFrame)
-
-local SelectWeatherButton = new("TextButton", {
-  Size = UDim2.new(0.25, 0, 1, 0),
-  Position = UDim2.new(0.25, 0, 0, 0),
-  BackgroundColor3 = COLOR_BTN,
-  TextColor3 = COLOR_WHITE,
-  Text = "Select Weather",
-  TextSize = 14,
-  Font = Enum.Font.SourceSans,
-}, PresetButtonsFrame)
-
-local SelectAllButton = new("TextButton", {
-  Size = UDim2.new(0.25, 0, 1, 0),
-  Position = UDim2.new(0.50, 0, 0, 0),
-  BackgroundColor3 = COLOR_BTN,
-  TextColor3 = COLOR_WHITE,
-  Text = "Select All",
-  TextSize = 14,
-  Font = Enum.Font.SourceSans,
-}, PresetButtonsFrame)
-
-local ClearAllButton = new("TextButton", {
-  Size = UDim2.new(0.25, 0, 1, 0),
-  Position = UDim2.new(0.75, 0, 0, 0),
-  BackgroundColor3 = COLOR_BTN,
-  TextColor3 = COLOR_WHITE,
-  Text = "Clear All",
-  TextSize = 14,
-  Font = Enum.Font.SourceSans,
-}, PresetButtonsFrame)
+local SelectSahurButton   = new("TextButton", { Size = UDim2.new(0.25,0,1,0), BackgroundColor3 = COLOR_BTN, TextColor3 = COLOR_WHITE, Text = "Select To Sahur", TextSize = 14, Font = Enum.Font.SourceSans }, PresetButtonsFrame)
+local SelectWeatherButton = new("TextButton", { Size = UDim2.new(0.25,0,1,0), Position = UDim2.new(0.25,0,0,0), BackgroundColor3 = COLOR_BTN, TextColor3 = COLOR_WHITE, Text = "Select Weather", TextSize = 14, Font = Enum.Font.SourceSans }, PresetButtonsFrame)
+local SelectAllButton     = new("TextButton", { Size = UDim2.new(0.25,0,1,0), Position = UDim2.new(0.50,0,0,0), BackgroundColor3 = COLOR_BTN, TextColor3 = COLOR_WHITE, Text = "Select All", TextSize = 14, Font = Enum.Font.SourceSans }, PresetButtonsFrame)
+local ClearAllButton      = new("TextButton", { Size = UDim2.new(0.25,0,1,0), Position = UDim2.new(0.75,0,0,0), BackgroundColor3 = COLOR_BTN, TextColor3 = COLOR_WHITE, Text = "Clear All", TextSize = 14, Font = Enum.Font.SourceSans }, PresetButtonsFrame)
 
 local AutoFarmToggle = new("TextButton", {
-  Size = UDim2.new(1, -20, 0, 30),
-  Position = UDim2.new(0, 10, 0, 250),
-  BackgroundColor3 = COLOR_BTN,
-  TextColor3 = COLOR_WHITE,
-  Text = "Auto-Farm: OFF",
-  TextSize = 14,
-  Font = Enum.Font.SourceSans,
+  Size = UDim2.new(1,-20,0,30), Position = UDim2.new(0,10,0,250),
+  BackgroundColor3 = COLOR_BTN, TextColor3 = COLOR_WHITE,
+  Text = "Auto-Farm: OFF", TextSize = 14, Font = Enum.Font.SourceSans
 }, MainTabFrame)
 
 local CurrentTargetLabel = new("TextLabel", {
-  Size = UDim2.new(1, -20, 0, 30),
-  Position = UDim2.new(0, 10, 0, 290),
-  BackgroundColor3 = COLOR_BG_MED,
-  TextColor3 = COLOR_WHITE,
-  Text = "Current Target: None",
-  TextSize = 14,
-  Font = Enum.Font.SourceSans,
+  Size = UDim2.new(1,-20,0,30), Position = UDim2.new(0,10,0,290),
+  BackgroundColor3 = COLOR_BG_MED, TextColor3 = COLOR_WHITE,
+  Text = "Current Target: None", TextSize = 14, Font = Enum.Font.SourceSans
 }, MainTabFrame)
 
--- ====== OPTIONS TAB UI ======
+-- ====== OPTIONS tab controls ======
 local ToggleMerchant1Button = new("TextButton", {
-  Size = UDim2.new(1, -20, 0, 30),
-  Position = UDim2.new(0, 10, 0, 10),
-  BackgroundColor3 = COLOR_BTN,
-  TextColor3 = COLOR_WHITE,
-  Text = "Auto Buy Mythics (Chicleteiramania): OFF",
-  TextSize = 14,
-  Font = Enum.Font.SourceSans,
+  Size = UDim2.new(1,-20,0,30), Position = UDim2.new(0,10,0,10),
+  BackgroundColor3 = COLOR_BTN, TextColor3 = COLOR_WHITE,
+  Text = "Auto Buy Mythics (Chicleteiramania): OFF", TextSize = 14, Font = Enum.Font.SourceSans
 }, OptionsTabFrame)
 
 local ToggleMerchant2Button = new("TextButton", {
-  Size = UDim2.new(1, -20, 0, 30),
-  Position = UDim2.new(0, 10, 0, 50),
-  BackgroundColor3 = COLOR_BTN,
-  TextColor3 = COLOR_WHITE,
-  Text = "Auto Buy Mythics (Bombardino Sewer): OFF",
-  TextSize = 14,
-  Font = Enum.Font.SourceSans,
+  Size = UDim2.new(1,-20,0,30), Position = UDim2.new(0,10,0,50),
+  BackgroundColor3 = COLOR_BTN, TextColor3 = COLOR_WHITE,
+  Text = "Auto Buy Mythics (Bombardino Sewer): OFF", TextSize = 14, Font = Enum.Font.SourceSans
 }, OptionsTabFrame)
 
 local ToggleAutoCratesButton = new("TextButton", {
-  Size = UDim2.new(1, -20, 0, 30),
-  Position = UDim2.new(0, 10, 0, 90),
-  BackgroundColor3 = COLOR_BTN,
-  TextColor3 = COLOR_WHITE,
-  Text = "Auto Open Crates: OFF",
-  TextSize = 14,
-  Font = Enum.Font.SourceSans,
+  Size = UDim2.new(1,-20,0,30), Position = UDim2.new(0,10,0,90),
+  BackgroundColor3 = COLOR_BTN, TextColor3 = COLOR_WHITE,
+  Text = "Auto Open Crates: OFF", TextSize = 14, Font = Enum.Font.SourceSans
 }, OptionsTabFrame)
 
--- ====== List helpers ======
+-- ====== list helpers ======
 local function applyButtonColor(btn, isSelected)
   btn.BackgroundColor3 = isSelected and COLOR_BTN_ACTIVE or COLOR_BTN
 end
 
 local function rebuildList()
-  for _, ch in ipairs(ModelScrollFrame:GetChildren()) do
-    if ch:IsA("TextButton") then ch:Destroy() end
-  end
-
+  for _, ch in ipairs(ModelScrollFrame:GetChildren()) do if ch:IsA("TextButton") then ch:Destroy() end end
   local items = farm.getFiltered()
   local y = 0
   for i, name in ipairs(items) do
     local btn = new("TextButton", {
-      Size = UDim2.new(1, -10, 0, 30),
-      BackgroundColor3 = COLOR_BTN,
-      TextColor3 = COLOR_WHITE,
-      Text = name,
-      TextSize = 14,
-      Font = Enum.Font.SourceSans,
-      LayoutOrder = i,
+      Size = UDim2.new(1,-10,0,30),
+      BackgroundColor3 = COLOR_BTN, TextColor3 = COLOR_WHITE,
+      Text = name, TextSize = 14, Font = Enum.Font.SourceSans, LayoutOrder = i
     }, ModelScrollFrame)
     applyButtonColor(btn, farm.isSelected(name))
     track(btn.MouseButton1Click:Connect(function()
       farm.toggleSelect(name)
       applyButtonColor(btn, farm.isSelected(name))
-      -- if auto-farm is running, nudge it to re-evaluate immediately
       if autoFarmEnabled then farm.forceRetarget() end
     end))
     y += 30
   end
-  ModelScrollFrame.CanvasSize = UDim2.new(0, 0, 0, y)
+  ModelScrollFrame.CanvasSize = UDim2.new(0,0,0,y)
 end
 
--- Initial populate
+-- init list
 farm.getMonsterModels()
 rebuildList()
-
--- Search
 track(SearchTextBox:GetPropertyChangedSignal("Text"):Connect(function()
   farm.filterMonsterModels(SearchTextBox and SearchTextBox.Text or "")
   rebuildList()
 end))
 
--- ====== Presets (idempotent + nudge) ======
+-- presets (idempotent + nudge loop)
 local function ensureSelected(name)
-  if not farm.isSelected(name) then
-    farm.toggleSelect(name)
-  end
+  if not farm.isSelected(name) then farm.toggleSelect(name) end
 end
-
 track(SelectWeatherButton.MouseButton1Click:Connect(function()
   ensureSelected("Weather Events")
   utils.notify("🌲 Preset", "Weather Events selected.", 3)
-  farm.filterMonsterModels(SearchTextBox and SearchTextBox.Text or "")
-  rebuildList()
-  -- Nudge the running loop so it attacks/teleports right away
-  farm.forceRetarget()
+  farm.filterMonsterModels(SearchTextBox and SearchTextBox.Text or ""); rebuildList()
+  if autoFarmEnabled then farm.forceRetarget() end
 end))
-
 track(SelectSahurButton.MouseButton1Click:Connect(function()
   ensureSelected("To Sahur")
   utils.notify("🌲 Preset", "To Sahur selected.", 3)
-  farm.filterMonsterModels(SearchTextBox and SearchTextBox.Text or "")
-  rebuildList()
-  farm.forceRetarget()
+  farm.filterMonsterModels(SearchTextBox and SearchTextBox.Text or ""); rebuildList()
+  if autoFarmEnabled then farm.forceRetarget() end
 end))
-
 track(SelectAllButton.MouseButton1Click:Connect(function()
-  local all = {}
-  for _, n in ipairs(farm.getMonsterModels()) do table.insert(all, n) end
-  farm.setSelected(all)
-  utils.notify("🌲 Preset", "Selected all models.", 3)
-  farm.filterMonsterModels(SearchTextBox and SearchTextBox.Text or "")
-  rebuildList()
-  farm.forceRetarget()
+  local all = {}; for _, n in ipairs(farm.getMonsterModels()) do table.insert(all, n) end
+  farm.setSelected(all); utils.notify("🌲 Preset","Selected all models.",3)
+  farm.filterMonsterModels(SearchTextBox and SearchTextBox.Text or ""); rebuildList()
+  if autoFarmEnabled then farm.forceRetarget() end
 end))
-
 track(ClearAllButton.MouseButton1Click:Connect(function()
-  farm.setSelected({})
-  utils.notify("🌲 Preset", "Cleared all selections.", 3)
-  farm.filterMonsterModels(SearchTextBox and SearchTextBox.Text or "")
-  rebuildList()
-  farm.forceRetarget()
+  farm.setSelected({}); utils.notify("🌲 Preset","Cleared all selections.",3)
+  farm.filterMonsterModels(SearchTextBox and SearchTextBox.Text or ""); rebuildList()
+  if autoFarmEnabled then farm.forceRetarget() end
 end))
 
--- ====== Auto-Farm toggle ======
+-- ====== auto-farm toggle ======
 autoFarmEnabled = false
 farm.setupAutoAttackRemote()
 
@@ -448,41 +286,34 @@ track(AutoFarmToggle.MouseButton1Click:Connect(function()
   autoFarmEnabled = not autoFarmEnabled
   AutoFarmToggle.Text = "Auto-Farm: " .. (autoFarmEnabled and "ON" or "OFF")
   AutoFarmToggle.BackgroundColor3 = autoFarmEnabled and COLOR_BTN_ACTIVE or COLOR_BTN
-
   if autoFarmEnabled then
     utils.notify("🌲 Auto-Farm", "Enabled. Weather Events prioritized.", 3)
     task.spawn(function()
       farm.runAutoFarm(function() return autoFarmEnabled end, function(txt)
         CurrentTargetLabel.Text = txt or "Current Target: None"
       end)
-      -- normalize if loop ends
       AutoFarmToggle.Text = "Auto-Farm: OFF"
       AutoFarmToggle.BackgroundColor3 = COLOR_BTN
       autoFarmEnabled = false
     end)
-    -- if user turned it on after picking presets, kick the loop
     farm.forceRetarget()
   else
     utils.notify("🌲 Auto-Farm", "Disabled.", 3)
   end
 end))
 
--- ====== Options toggles (deps via _deps) ======
+-- ====== options toggles (loader-aware) ======
 local merchant, crates, antiAFK
 local function ensureMerchant() if not merchant then merchant = tryRequire("merchant") end; return merchant end
 local function ensureCrates()   if not crates   then crates   = tryRequire("crates")   end; return crates   end
 local function ensureAntiAFK()  if not antiAFK  then antiAFK  = tryRequire("anti_afk") end; return antiAFK  end
 
 local m1Enabled, m2Enabled, cratesEnabled = false, false, false
-local function setBtn(btn, on, label)
-  btn.Text = label .. (on and "ON" or "OFF")
-  btn.BackgroundColor3 = on and COLOR_BTN_ACTIVE or COLOR_BTN
-end
+local function setBtn(btn, on, label) btn.Text = label .. (on and "ON" or "OFF"); btn.BackgroundColor3 = on and COLOR_BTN_ACTIVE or COLOR_BTN end
 
 track(ToggleMerchant1Button.MouseButton1Click:Connect(function()
   m1Enabled = not m1Enabled
-  local ok = false
-  local mod = ensureMerchant()
+  local ok = false; local mod = ensureMerchant()
   if mod and mod.toggleService then ok = pcall(function() mod.toggleService("SmelterMerchantService", m1Enabled) end) end
   if not ok then utils.notify("🌲 Merchant", "Module missing or failed (SmelterMerchantService).", 4) end
   setBtn(ToggleMerchant1Button, m1Enabled, "Auto Buy Mythics (Chicleteiramania): ")
@@ -490,8 +321,7 @@ end))
 
 track(ToggleMerchant2Button.MouseButton1Click:Connect(function()
   m2Enabled = not m2Enabled
-  local ok = false
-  local mod = ensureMerchant()
+  local ok = false; local mod = ensureMerchant()
   if mod and mod.toggleService then ok = pcall(function() mod.toggleService("SmelterMerchantService2", m2Enabled) end) end
   if not ok then utils.notify("🌲 Merchant", "Module missing or failed (SmelterMerchantService2).", 4) end
   setBtn(ToggleMerchant2Button, m2Enabled, "Auto Buy Mythics (Bombardino Sewer): ")
@@ -499,12 +329,10 @@ end))
 
 track(ToggleAutoCratesButton.MouseButton1Click:Connect(function()
   cratesEnabled = not cratesEnabled
-  local ok = false
-  local mod = ensureCrates()
+  local ok = false; local mod = ensureCrates()
   if mod and mod.setEnabled then ok = pcall(function() mod.setEnabled(cratesEnabled) end) end
   if not ok then utils.notify("🎁 Crates", "Module missing or failed (crates).", 4) end
   setBtn(ToggleAutoCratesButton, cratesEnabled, "Auto Open Crates: ")
 end))
 
--- ====== Final ======
-utils.notify("🌲 WoodzHUB", "UI ready. Presets nudge farm; Options deps use _deps.", 4)
+utils.notify("🌲 WoodzHUB", "UI ready. Presets nudge farm; _deps-aware modules; drag hardened.", 4)
