@@ -1,5 +1,5 @@
 -- farm.lua
--- Auto-farm with hard-lock hover (no glide).
+-- Auto-farm with server-replicated hard lock (no glide, hits register).
 -- Weather Events: 30s timeout. Non-weather: skip if HP doesn't drop for 3s.
 
 -- 🔧 Utils + constants
@@ -199,7 +199,7 @@ function M.setupAutoAttackRemote()
 end
 
 ----------------------------------------------------------------------
--- Helpers (no BodyPosition; we hard-lock with Anchored + CFrame)
+-- Helpers (server-synced movement; no anchoring)
 ----------------------------------------------------------------------
 local function isValidCFrame(cf)
   if not cf then return false end
@@ -228,14 +228,13 @@ local function zeroVel(hrp)
   end)
 end
 
--- Glide-free hop to cf: zero vel, PlatformStand snap, then resume
+-- Glide-free hop to cf with replication: zero vel, brief PlatformStand, PivotTo.
 local function hardTeleport(cf)
   local char = player.Character
   if not char then return end
   local hum = char:FindFirstChildOfClass("Humanoid")
   local hrp = char:FindFirstChild("HumanoidRootPart")
   if not hum or not hrp then return end
-
   zeroVel(hrp)
   local oldPS = hum.PlatformStand
   hum.PlatformStand = true
@@ -245,7 +244,7 @@ local function hardTeleport(cf)
 end
 
 ----------------------------------------------------------------------
--- Public: run auto farm (Weather timeout + Non-weather stall skip + no glide)
+-- Public: run auto farm
 ----------------------------------------------------------------------
 function M.runAutoFarm(flagGetter, setTargetText)
   if not autoAttackRemote then
@@ -281,26 +280,26 @@ function M.runAutoFarm(flagGetter, setTargetText)
       local eh = enemy:FindFirstChildOfClass("Humanoid")
       if not eh or eh.Health <= 0 then continue end
 
-      -- Plan a target position first
+      -- plan a target position
       local okPivot, pcf = pcall(function() return enemy:GetPivot() end)
       local targetCF = (okPivot and isValidCFrame(pcf)) and (pcf * CFrame.new(0, 20, 0)) or nil
       if not targetCF then continue end
 
-      -- Instant hop (no glide)
+      -- instant hop (no glide) with server replication
       hardTeleport(targetCF)
 
-      -- Reacquire after hop (in case of morph/streaming)
+      -- ensure we still have character bits
       character = player.Character
       hum = character and character:FindFirstChildOfClass("Humanoid")
       hrp = character and character:FindFirstChild("HumanoidRootPart")
       if not character or not hum or not hrp then continue end
 
-      -- Anchor to kill any residual drift while attacking
-      local prevAnchored = hrp.Anchored
-      hrp.Anchored = true
+      -- lock physics gently (no anchoring): PlatformStand true and keep zero velocity
+      local oldPS = hum.PlatformStand
+      hum.PlatformStand = true
       zeroVel(hrp)
 
-      -- Resolve a concrete part to follow
+      -- resolve a concrete part to follow
       local targetPart = findBasePart(enemy)
       if not targetPart then
         local t0 = tick()
@@ -310,13 +309,13 @@ function M.runAutoFarm(flagGetter, setTargetText)
         until targetPart or (tick() - t0) > 2 or not enemy.Parent or eh.Health <= 0
       end
       if not targetPart then
-        hrp.Anchored = prevAnchored
+        hum.PlatformStand = oldPS
         continue
       end
 
       label(("Current Target: %s (Health: %s)"):format(enemy.Name, math.floor(eh.Health)))
 
-      -- Health tracking for stall detection
+      -- stall + weather timers
       local isWeather = isWeatherName(enemy.Name)
       local lastHealth = eh.Health
       local lastDropAt = tick()
@@ -329,22 +328,13 @@ function M.runAutoFarm(flagGetter, setTargetText)
       end)
 
       while flagGetter() and enemy.Parent and eh.Health > 0 do
-        -- follow above the target without physics
+        -- follow above target with server-synced PivotTo (no glide)
         local partNow = findBasePart(enemy) or targetPart
         if partNow then
           local cfNow = partNow.CFrame * CFrame.new(0, 20, 0)
           if isValidCFrame(cfNow) then
-            -- Directly set HRP CFrame while Anchored → zero glide
-            pcall(function()
-              -- re-acquire HRP if morph replaced it
-              local curHRP = character:FindFirstChild("HumanoidRootPart")
-              if curHRP ~= hrp and curHRP then
-                hrp = curHRP
-                hrp.Anchored = true
-                zeroVel(hrp)
-              end
-              hrp.CFrame = cfNow
-            end)
+            zeroVel(hrp)
+            character:PivotTo(cfNow) -- replicated; no anchoring
           end
         end
 
@@ -372,9 +362,9 @@ function M.runAutoFarm(flagGetter, setTargetText)
       if hcConn then hcConn:Disconnect() end
       label("Current Target: None")
 
-      -- Unanchor to return control between targets
-      if hrp and hrp.Parent then
-        hrp.Anchored = prevAnchored
+      -- restore humanoid state
+      if hum and hum.Parent then
+        hum.PlatformStand = oldPS
         zeroVel(hrp)
       end
 
