@@ -12,7 +12,7 @@ local function getUtils()
 end
 
 local utils      = getUtils()
-local constants  = require(script.Parent.constants)
+local data = require(script.Parent.data_monsters)
 
 local Players            = game:GetService("Players")
 local Workspace          = game:GetService("Workspace")
