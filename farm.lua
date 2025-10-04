@@ -1,17 +1,15 @@
 -- farm.lua
--- Loads Weather/To Sahur from data_monsters.lua (preferred), falls back to constants.lua.
--- Now self-contained: if no `utils` is injected, uses a built-in `utilsFallback`
--- so notifications + waitForCharacter still work.
+-- Auto-farm with Weather/To Sahur groups from data_monsters.lua (fallback to constants.lua).
+-- Loader-safe (script may be a table). Self-contained utils fallback for toasts + waitForCharacter.
 
--- ========= utils (injected or fallback) =========
+-- ========= Services =========
 local Players           = game:GetService("Players")
-local StarterGui        = game:GetService("StarterGui")
-local RunService        = game:GetService("RunService")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Workspace         = game:GetService("Workspace")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService        = game:GetService("RunService")
+local player            = Players.LocalPlayer
 
-local player = Players.LocalPlayer
-
+-- ========= Utils (injected or fallback) =========
 local function buildUtilsFallback()
   local COLOR_BG_DARK = Color3.fromRGB(30,30,30)
   local COLOR_BG_MED  = Color3.fromRGB(50,50,50)
@@ -81,27 +79,23 @@ local function buildUtilsFallback()
 end
 
 local function getInjectedUtils()
-  -- 1) script as plain table with _deps
   local s = rawget(getfenv(), "script")
+  -- script as plain table with _deps
   if type(s) == "table" and s._deps and s._deps.utils then
     return s._deps.utils
   end
-  -- 2) script is Instance with Parent._deps ModuleScript "utils"
+  -- script as Instance with Parent._deps (ModuleScript or table)
   if typeof(s) == "Instance" and s.Parent then
     local ok, depsFolder = pcall(function() return s.Parent:FindFirstChild("_deps") end)
     if ok and typeof(depsFolder) == "Instance" then
       local ms = depsFolder:FindFirstChild("utils")
-      if ms then
-        local okr, mod = pcall(require, ms)
-        if okr then return mod end
-      end
+      if ms then local ok2, mod = pcall(require, ms); if ok2 then return mod end end
     end
-    -- Parent._deps as plain table
     if type(s.Parent._deps) == "table" and s.Parent._deps.utils then
       return s.Parent._deps.utils
     end
   end
-  -- 3) global
+  -- global injection
   if rawget(getfenv(), "__WOODZ_UTILS") then
     return __WOODZ_UTILS
   end
@@ -110,45 +104,34 @@ end
 
 local utils = getInjectedUtils() or buildUtilsFallback()
 
--- ========= safe require helper =========
+-- ========= Safe require helper =========
 local function tryRequire(name)
   local s = rawget(getfenv(), "script")
-
-  -- a) script table with _deps
+  -- script as table with _deps
   if type(s) == "table" and s._deps and s._deps[name] then
     return s._deps[name]
   end
-
-  -- b) global deps table
+  -- global deps table
   local DEPS = rawget(getfenv(), "__WOODZ_DEPS")
   if type(DEPS) == "table" and DEPS[name] then
     return DEPS[name]
   end
-
-  -- c) script Instance → Parent._deps ModuleScript or child ModuleScript
+  -- script Instance paths
   if typeof(s) == "Instance" and s.Parent then
     local ok, depsFolder = pcall(function() return s.Parent:FindFirstChild("_deps") end)
     if ok and typeof(depsFolder) == "Instance" then
       local depMS = depsFolder:FindFirstChild(name)
-      if depMS then
-        local okr, mod = pcall(require, depMS)
-        if okr then return mod end
-      end
+      if depMS then local okr, mod = pcall(require, depMS); if okr then return mod end end
     end
     local child = s.Parent:FindFirstChild(name)
-    if child then
-      local okr, mod = pcall(require, child)
-      if okr then return mod end
-    end
+    if child then local okr, mod = pcall(require, child); if okr then return mod end end
     if type(s.Parent._deps) == "table" and s.Parent._deps[name] then
       return s.Parent._deps[name]
     end
   end
-
-  -- d) globals like __WOODZ_DATA_MONSTERS
+  -- globals like __WOODZ_DATA_MONSTERS
   local g = rawget(getfenv(), "__WOODZ_" .. string.upper(name))
   if g then return g end
-
   return nil
 end
 
@@ -156,21 +139,21 @@ end
 local DATA = tryRequire("data_monsters")
 local CONST = tryRequire("constants")
 if not DATA and not CONST then
-  utils.notify("🌲 WoodzHUB Error", "No data_monsters.lua or constants.lua found for groups.", 6)
+  utils.notify("🌲 WoodzHUB Error", "No data_monsters.lua or constants.lua found for groups.", 5)
 end
 
--- ========= config =========
+-- ========= Config =========
 local WEATHER_TIMEOUT            = 30   -- seconds (Weather Events only)
 local NON_WEATHER_STALL_TIMEOUT  = 3    -- seconds without HP drop → skip
 local ABOVE_OFFSET               = Vector3.new(0, 20, 0)
 
--- Smooth follow constraints
+-- Smooth follow constraints (smoother, no “glide down”)
 local POS_RESPONSIVENESS         = 200
 local POS_MAX_FORCE              = 1e9
 local ORI_RESPONSIVENESS         = 200
 local ORI_MAX_TORQUE             = 1e9
 
--- ========= lists from data =========
+-- ========= Lists from data =========
 local function getWeatherList()
   return (DATA and DATA.weatherEventModels)
       or (CONST and CONST.weatherEventModels)
@@ -191,8 +174,9 @@ local WEATHER_NAMES = table.clone(getWeatherList())
 local SAHUR_NAMES   = table.clone(getSahurList())
 local FORCED_NAMES  = table.clone(getForcedList())
 
--- ========= selection/filter =========
+-- ========= Selection / Filter state =========
 local M = {}
+
 local allMonsterModels      = {}
 local filteredMonsterModels = {}
 local selectedMonsterModels = { "Weather Events" }
@@ -203,7 +187,6 @@ local function norm(s)
   s = s:gsub("^%s+", ""):gsub("%s+$", "")
   return s
 end
-
 local function matchInList(list, name)
   local ln = norm(name)
   for _, v in ipairs(list) do
@@ -213,7 +196,6 @@ local function matchInList(list, name)
   end
   return false
 end
-
 local function isWeatherName(name) return matchInList(WEATHER_NAMES, name) end
 local function isSahurName(name)   return matchInList(SAHUR_NAMES,   name) end
 
@@ -232,7 +214,7 @@ function M.isSelected(name) return table.find(selectedMonsterModels, name) ~= ni
 local _retargetFlag = 0
 function M.forceRetarget() _retargetFlag = tick() end
 
--- ========= discovery / filtering =========
+-- ========= Discovery / Filtering =========
 local function pushUnique(valid, name)
   if not name then return end
   for _, v in ipairs(valid) do if v == name then return end end
@@ -264,9 +246,7 @@ function M.filterMonsterModels(text)
   text = tostring(text or ""):lower()
   local filtered = {}
   local function matchesAny(list)
-    for _, n in ipairs(list) do
-      if n:lower():find(text, 1, true) then return true end
-    end
+    for _, n in ipairs(list) do if n:lower():find(text, 1, true) then return true end end
     return false
   end
 
@@ -293,7 +273,30 @@ function M.filterMonsterModels(text)
   return filtered
 end
 
--- ========= helpers =========
+-- ========= Group counters (for UI feedback) =========
+function M.countWeatherEnemies()
+  local c = 0
+  for _, node in ipairs(Workspace:GetDescendants()) do
+    if node:IsA("Model") and not Players:GetPlayerFromCharacter(node) then
+      local h = node:FindFirstChildOfClass("Humanoid")
+      if h and h.Health > 0 and isWeatherName(node.Name) then c += 1 end
+    end
+  end
+  return c
+end
+
+function M.countSahurEnemies()
+  local c = 0
+  for _, node in ipairs(Workspace:GetDescendants()) do
+    if node:IsA("Model") and not Players:GetPlayerFromCharacter(node) then
+      local h = node:FindFirstChildOfClass("Humanoid")
+      if h and h.Health > 0 and isSahurName(node.Name) then c += 1 end
+    end
+  end
+  return c
+end
+
+-- ========= Helpers =========
 local function isValidCFrame(cf)
   if not cf then return false end
   local p = cf.Position
@@ -342,16 +345,16 @@ local function makeSmoothFollow(hrp)
   ap.Mode = Enum.PositionAlignmentMode.OneAttachment
   ap.Attachment0 = a0
   ap.ApplyAtCenterOfMass = true
-  ap.MaxForce = 1e9
-  ap.Responsiveness = 200
+  ap.MaxForce = POS_MAX_FORCE
+  ap.Responsiveness = POS_RESPONSIVENESS
   ap.RigidityEnabled = false
   ap.Parent = hrp
 
   local ao = Instance.new("AlignOrientation"); ao.Name = "WoodzHub_AO"
   ao.Mode = Enum.OrientationAlignmentMode.OneAttachment
   ao.Attachment0 = a0
-  ao.MaxTorque = 1e9
-  ao.Responsiveness = 200
+  ao.MaxTorque = ORI_MAX_TORQUE
+  ao.Responsiveness = ORI_RESPONSIVENESS
   ao.RigidityEnabled = false
   ao.Parent = hrp
 
@@ -361,7 +364,7 @@ local function makeSmoothFollow(hrp)
   return ctl
 end
 
--- ========= remote =========
+-- ========= Remote =========
 local autoAttackRemote
 function M.setupAutoAttackRemote()
   autoAttackRemote = nil
@@ -381,7 +384,7 @@ function M.setupAutoAttackRemote()
   end
 end
 
--- ========= main loop =========
+-- ========= Main loop =========
 function M.runAutoFarm(flagGetter, setTargetText)
   if not autoAttackRemote then
     utils.notify("🌲 Auto-Farm", "RequestAttack RemoteFunction not found.", 5)
@@ -398,6 +401,7 @@ function M.runAutoFarm(flagGetter, setTargetText)
       label("Current Target: None"); task.wait(0.05); continue
     end
 
+    -- Build prioritized list each cycle
     local wantWeather = table.find(selectedMonsterModels, "Weather Events") ~= nil
     local wantSahur   = table.find(selectedMonsterModels, "To Sahur") ~= nil
     local explicitSet = {}
@@ -405,7 +409,6 @@ function M.runAutoFarm(flagGetter, setTargetText)
       if n ~= "Weather Events" and n ~= "To Sahur" then explicitSet[n:lower()] = true end
     end
 
-    -- Build prioritized list each cycle
     local weather, explicit, sahur = {}, {}, {}
     for _, node in ipairs(Workspace:GetDescendants()) do
       if node:IsA("Model") and not Players:GetPlayerFromCharacter(node) then
@@ -443,7 +446,7 @@ function M.runAutoFarm(flagGetter, setTargetText)
       local targetCF = (okPivot and isValidCFrame(pcf)) and (pcf * CFrame.new(ABOVE_OFFSET)) or nil
       if not targetCF then continue end
 
-      -- jump to target
+      -- jump to target (no glide)
       hardTeleport(targetCF)
 
       -- re-validate character
@@ -454,28 +457,22 @@ function M.runAutoFarm(flagGetter, setTargetText)
 
       local oldPS = hum.PlatformStand
       hum.PlatformStand = true
+      zeroVel(hrp)
       local ctl = makeSmoothFollow(hrp)
 
       -- Find a base part to follow
-      local targetPart = nil
-      do
-        targetPart = enemy:FindFirstChild("HumanoidRootPart")
-        if not (targetPart and targetPart:IsA("BasePart")) then
-          local names = { "PrimaryPart","Body","Hitbox","Root","Main" }
-          for _, n in ipairs(names) do
-            local p = enemy:FindFirstChild(n)
-            if p and p:IsA("BasePart") then targetPart = p; break end
-          end
-          if not targetPart then
-            for _, d in ipairs(enemy:GetDescendants()) do
-              if d:IsA("BasePart") then targetPart = d; break end
-            end
-          end
-        end
+      local targetPart = findBasePart(enemy)
+      if not targetPart then
+        local t0 = tick()
+        repeat
+          RunService.Heartbeat:Wait()
+          targetPart = findBasePart(enemy)
+        until targetPart or (tick() - t0) > 2 or not enemy.Parent or eh.Health <= 0
       end
       if not targetPart then hum.PlatformStand = oldPS; ctl:destroy(); continue end
 
       label(("Current Target: %s (Health: %s)"):format(enemy.Name, math.floor(eh.Health)))
+
       local isWeather = isWeatherName(enemy.Name)
       local lastHealth = eh.Health
       local lastDropAt = tick()
@@ -489,8 +486,9 @@ function M.runAutoFarm(flagGetter, setTargetText)
 
       while flagGetter() and enemy.Parent and eh.Health > 0 do
         if _retargetFlag ~= lastRetargetSeen then lastRetargetSeen = _retargetFlag; break end
-        local partNow = (enemy:FindFirstChild("HumanoidRootPart") or targetPart)
-        if not (partNow and partNow:IsA("BasePart")) then break end
+
+        local partNow = findBasePart(enemy) or targetPart
+        if not partNow then break end
 
         ctl:setGoal(partNow.CFrame * CFrame.new(ABOVE_OFFSET))
 
@@ -515,8 +513,7 @@ function M.runAutoFarm(flagGetter, setTargetText)
       if hcConn then hcConn:Disconnect() end
       label("Current Target: None")
       ctl:destroy()
-      if hum and hum.Parent then hum.PlatformStand = oldPS end
-
+      if hum and hum.Parent then hum.PlatformStand = oldPS; zeroVel(hrp) end
       RunService.Heartbeat:Wait()
     end
 
