@@ -1,22 +1,28 @@
 -- anti_afk.lua
-local UserInputService = game:GetService("UserInputService")
-local VirtualUser     = game:GetService("VirtualUser")
+-- Standalone Anti-AFK helper with enable/disable/toggle/isEnabled/ensure
 
-local M = {}
-local enabled = false
+local Players    = game:GetService("Players")
+local VirtualUser = game:GetService("VirtualUser")
+
+local AntiAFK = {
+  _enabled = false,
+  _running = false,
+}
 
 local function loop()
-  task.spawn(function()
+task.spawn(function()
     while enabled do
-      pcall(function()
-        VirtualUser:CaptureController()
-        VirtualUser:SetKeyDown("W"); task.wait(0.10); VirtualUser:SetKeyUp("W")
-        task.wait(0.10)
-        VirtualUser:MoveMouse(Vector2.new(10,0))
-      end)
-      task.wait(60)
-    end
-  end)
+pcall(function()
+VirtualUser:CaptureController()
+        VirtualUser:SetKeyDown("W")
+        task.wait(0.1)
+        VirtualUser:SetKeyUp("W")
+        task.wait(0.1)
+        VirtualUser:MoveMouse(Vector2.new(10, 0))
+end)
+task.wait(60)
+end
+end)
 end
 
 function M.setEnabled(flag)
