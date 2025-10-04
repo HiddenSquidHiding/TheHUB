@@ -1,8 +1,8 @@
 -- app.lua
--- Minimal app that wires preset buttons (Weather / To Sahur), selection list,
--- search filter, and Auto-Farm with live target label.
+-- WoodzHUB UI: presets wired (Weather / To Sahur), selection list w/ live coloring,
+-- Auto-Farm toggle (streams target label), and a functional Options tab.
 
--- Sibling deps
+-- ------------- Sibling deps -------------
 local function getUtils()
   local p = script and script.Parent
   if p and p._deps and p._deps.utils then return p._deps.utils end
@@ -14,16 +14,26 @@ local utils      = getUtils()
 local constants  = require(script.Parent.constants)
 local farm       = require(script.Parent.farm)
 
--- Roblox services
+-- optional modules (loaded lazily & safely)
+local function tryRequire(name)
+  local container = script and script.Parent
+  if not container then return nil end
+  local ok, mod = pcall(function()
+    local child = container:FindFirstChild(name)
+    if not child then return nil end
+    return require(child)
+  end)
+  if ok then return mod else return nil end
+end
+
+-- ------------- Services / basics -------------
 local Players    = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
 
 local player     = Players.LocalPlayer
 local PlayerGui  = player:WaitForChild("PlayerGui")
 
-----------------------------------------------------------------------
--- Colors / layout (match your previous style)
-----------------------------------------------------------------------
+-- ------------- Colors / layout -------------
 local COLOR_BG_DARK     = Color3.fromRGB(30, 30, 30)
 local COLOR_BG          = Color3.fromRGB(40, 40, 40)
 local COLOR_BG_MED      = Color3.fromRGB(50, 50, 50)
@@ -36,14 +46,8 @@ local SIZE_MIN  = UDim2.new(0, 400, 0, 50)
 
 local function new(t, props, parent)
   local i = Instance.new(t)
-  if props then
-    for k, v in pairs(props) do
-      i[k] = v
-    end
-  end
-  if parent then
-    i.Parent = parent
-  end
+  if props then for k, v in pairs(props) do i[k] = v end end
+  if parent then i.Parent = parent end
   return i
 end
 
@@ -53,9 +57,7 @@ local function track(conn)
   return conn
 end
 
-----------------------------------------------------------------------
--- Root GUI
-----------------------------------------------------------------------
+-- ------------- Root GUI -------------
 local ScreenGui = new("ScreenGui", {
   Name = "WoodzHUB",
   ResetOnSpawn = false,
@@ -68,7 +70,7 @@ local MainFrame = new("Frame", {
   Size = SIZE_MAIN,
   Position = UDim2.new(0.5, -200, 0.5, -270),
   BackgroundColor3 = COLOR_BG_DARK,
-  BorderSizePixel = 0,
+  BorderSizePixel  = 0,
 }, ScreenGui)
 
 local TitleLabel = new("TextLabel", {
@@ -154,9 +156,7 @@ local OptionsTabFrame = new("Frame", {
   Visible = false,
 }, MainFrame)
 
-----------------------------------------------------------------------
--- Dragging
-----------------------------------------------------------------------
+-- ------------- Dragging -------------
 do
   local dragging, dragStart, startPos = false, nil, nil
   local function begin(input)
@@ -182,9 +182,7 @@ do
   track(UserInputService.InputChanged:Connect(update))
 end
 
-----------------------------------------------------------------------
--- Min/Max/Close
-----------------------------------------------------------------------
+-- ------------- Min/Max/Close -------------
 local isMinimized = false
 local function minimize()
   isMinimized = true
@@ -199,7 +197,6 @@ local function maximize()
   isMinimized = false
   MainFrame.Size = SIZE_MAIN
   TabFrame.Visible = true
-  -- restore whichever tab is active
   MainTabFrame.Visible = MainTabButton.BackgroundColor3 == COLOR_BTN
   OptionsTabFrame.Visible = OptionsTabButton.BackgroundColor3 == COLOR_BTN
   MinimizeButton.Visible = true
@@ -211,9 +208,7 @@ track(CloseButton.MouseButton1Click:Connect(function()
   ScreenGui:Destroy()
 end))
 
-----------------------------------------------------------------------
--- Tabs
-----------------------------------------------------------------------
+-- ------------- Tabs -------------
 local function gotoMain()
   if isMinimized then return end
   MainTabButton.BackgroundColor3 = COLOR_BTN
@@ -231,9 +226,7 @@ end
 track(MainTabButton.MouseButton1Click:Connect(gotoMain))
 track(OptionsTabButton.MouseButton1Click:Connect(gotoOptions))
 
-----------------------------------------------------------------------
--- MAIN TAB UI
-----------------------------------------------------------------------
+-- ------------- MAIN TAB UI -------------
 local SearchTextBox = new("TextBox", {
   Size = UDim2.new(1, -20, 0, 30),
   Position = UDim2.new(0, 10, 0, 10),
@@ -320,29 +313,43 @@ local CurrentTargetLabel = new("TextLabel", {
   Font = Enum.Font.SourceSans,
 }, MainTabFrame)
 
-----------------------------------------------------------------------
--- OPTIONS TAB UI (placeholder for your other toggles)
-----------------------------------------------------------------------
-new("TextLabel", {
+-- ------------- OPTIONS TAB UI -------------
+local ToggleMerchant1Button = new("TextButton", {
   Size = UDim2.new(1, -20, 0, 30),
   Position = UDim2.new(0, 10, 0, 10),
-  BackgroundTransparency = 1,
+  BackgroundColor3 = COLOR_BTN,
   TextColor3 = COLOR_WHITE,
-  Text = "Options coming soon…",
+  Text = "Auto Buy Mythics (Chicleteiramania): OFF",
   TextSize = 14,
   Font = Enum.Font.SourceSans,
-  TextXAlignment = Enum.TextXAlignment.Left,
 }, OptionsTabFrame)
 
-----------------------------------------------------------------------
--- Data + List binding
-----------------------------------------------------------------------
+local ToggleMerchant2Button = new("TextButton", {
+  Size = UDim2.new(1, -20, 0, 30),
+  Position = UDim2.new(0, 10, 0, 50),
+  BackgroundColor3 = COLOR_BTN,
+  TextColor3 = COLOR_WHITE,
+  Text = "Auto Buy Mythics (Bombardino Sewer): OFF",
+  TextSize = 14,
+  Font = Enum.Font.SourceSans,
+}, OptionsTabFrame)
+
+local ToggleAutoCratesButton = new("TextButton", {
+  Size = UDim2.new(1, -20, 0, 30),
+  Position = UDim2.new(0, 10, 0, 90),
+  BackgroundColor3 = COLOR_BTN,
+  TextColor3 = COLOR_WHITE,
+  Text = "Auto Open Crates: OFF",
+  TextSize = 14,
+  Font = Enum.Font.SourceSans,
+}, OptionsTabFrame)
+
+-- ------------- Helpers for list -------------
 local function applyButtonColor(btn, isSelected)
   btn.BackgroundColor3 = isSelected and COLOR_BTN_ACTIVE or COLOR_BTN
 end
 
 local function rebuildList()
-  -- clear old
   for _, ch in ipairs(ModelScrollFrame:GetChildren()) do
     if ch:IsA("TextButton") then ch:Destroy() end
   end
@@ -361,7 +368,6 @@ local function rebuildList()
     }, ModelScrollFrame)
 
     applyButtonColor(btn, farm.isSelected(name))
-
     track(btn.MouseButton1Click:Connect(function()
       farm.toggleSelect(name)
       applyButtonColor(btn, farm.isSelected(name))
@@ -382,31 +388,26 @@ track(SearchTextBox:GetPropertyChangedSignal("Text"):Connect(function()
   rebuildList()
 end))
 
-----------------------------------------------------------------------
--- Presets wiring (this is what was missing)
-----------------------------------------------------------------------
-track(SelectWeatherButton.MouseButton1Click:Connect(function()
-  if not farm.isSelected("Weather Events") then
-    local selected = farm.getSelected()
-    table.insert(selected, "Weather Events")
-    farm.setSelected(selected)
-    utils.notify("🌲 Preset", "Selected all Weather Events models.", 3)
-    rebuildList()
-  else
-    utils.notify("🌲 Preset", "Weather Events already selected.", 3)
+-- ------------- Preset wiring (idempotent adds) -------------
+local function ensureSelected(name)
+  if not farm.isSelected(name) then
+    farm.toggleSelect(name)
   end
+end
+
+track(SelectWeatherButton.MouseButton1Click:Connect(function()
+  ensureSelected("Weather Events")
+  utils.notify("🌲 Preset", "Weather Events selected.", 3)
+  -- keep current search filter respected
+  farm.filterMonsterModels(SearchTextBox.Text)
+  rebuildList()
 end))
 
 track(SelectSahurButton.MouseButton1Click:Connect(function()
-  if not farm.isSelected("To Sahur") then
-    local selected = farm.getSelected()
-    table.insert(selected, "To Sahur")
-    farm.setSelected(selected)
-    utils.notify("🌲 Preset", "Selected all To Sahur models.", 3)
-    rebuildList()
-  else
-    utils.notify("🌲 Preset", "To Sahur already selected.", 3)
-  end
+  ensureSelected("To Sahur")
+  utils.notify("🌲 Preset", "To Sahur selected.", 3)
+  farm.filterMonsterModels(SearchTextBox.Text)
+  rebuildList()
 end))
 
 track(SelectAllButton.MouseButton1Click:Connect(function()
@@ -414,21 +415,19 @@ track(SelectAllButton.MouseButton1Click:Connect(function()
   for _, n in ipairs(farm.getMonsterModels()) do table.insert(all, n) end
   farm.setSelected(all)
   utils.notify("🌲 Preset", "Selected all models.", 3)
+  farm.filterMonsterModels(SearchTextBox.Text)
   rebuildList()
 end))
 
 track(ClearAllButton.MouseButton1Click:Connect(function()
   farm.setSelected({})
   utils.notify("🌲 Preset", "Cleared all selections.", 3)
+  farm.filterMonsterModels(SearchTextBox.Text)
   rebuildList()
 end))
 
-----------------------------------------------------------------------
--- Auto-Farm toggle
-----------------------------------------------------------------------
+-- ------------- Auto-Farm toggle -------------
 local autoFarmEnabled = false
-
--- give farm its RemoteFunction
 farm.setupAutoAttackRemote()
 
 track(AutoFarmToggle.MouseButton1Click:Connect(function()
@@ -440,10 +439,9 @@ track(AutoFarmToggle.MouseButton1Click:Connect(function()
     utils.notify("🌲 Auto-Farm", "Enabled. Weather Events prioritized.", 3)
     task.spawn(function()
       farm.runAutoFarm(function() return autoFarmEnabled end, function(txt)
-        -- live target updates
         CurrentTargetLabel.Text = txt or "Current Target: None"
       end)
-      -- when it exits, normalize the toggle if the loop stopped for any reason
+      -- Normalize if the loop exits
       AutoFarmToggle.Text = "Auto-Farm: OFF"
       AutoFarmToggle.BackgroundColor3 = COLOR_BTN
       autoFarmEnabled = false
@@ -453,7 +451,71 @@ track(AutoFarmToggle.MouseButton1Click:Connect(function()
   end
 end))
 
-----------------------------------------------------------------------
--- Done
-----------------------------------------------------------------------
-utils.notify("🌲 WoodzHUB", "UI ready. Preset buttons now wired.", 4)
+-- ------------- Options toggles -------------
+local merchant = nil
+local crates   = nil
+local antiAFK  = nil
+
+-- lazy load when first used
+local function ensureMerchant()
+  if not merchant then merchant = tryRequire("merchant") end
+  return merchant
+end
+local function ensureCrates()
+  if not crates then crates = tryRequire("crates") end
+  return crates
+end
+local function ensureAntiAFK()
+  if not antiAFK then antiAFK = tryRequire("anti_afk") end
+  return antiAFK
+end
+
+local m1Enabled, m2Enabled, cratesEnabled = false, false, false
+
+local function setBtn(btn, on, label)
+  btn.Text = label .. (on and "ON" or "OFF")
+  btn.BackgroundColor3 = on and COLOR_BTN_ACTIVE or COLOR_BTN
+end
+
+track(ToggleMerchant1Button.MouseButton1Click:Connect(function()
+  m1Enabled = not m1Enabled
+  local ok = false
+  local mod = ensureMerchant()
+  if mod and mod.toggleService then
+    -- serviceName, enabled
+    ok = pcall(function() mod.toggleService("SmelterMerchantService", m1Enabled) end)
+  end
+  if not ok then
+    utils.notify("🌲 Merchant", "Module missing or failed (SmelterMerchantService).", 4)
+  end
+  setBtn(ToggleMerchant1Button, m1Enabled, "Auto Buy Mythics (Chicleteiramania): ")
+end))
+
+track(ToggleMerchant2Button.MouseButton1Click:Connect(function()
+  m2Enabled = not m2Enabled
+  local ok = false
+  local mod = ensureMerchant()
+  if mod and mod.toggleService then
+    ok = pcall(function() mod.toggleService("SmelterMerchantService2", m2Enabled) end)
+  end
+  if not ok then
+    utils.notify("🌲 Merchant", "Module missing or failed (SmelterMerchantService2).", 4)
+  end
+  setBtn(ToggleMerchant2Button, m2Enabled, "Auto Buy Mythics (Bombardino Sewer): ")
+end))
+
+track(ToggleAutoCratesButton.MouseButton1Click:Connect(function()
+  cratesEnabled = not cratesEnabled
+  local ok = false
+  local mod = ensureCrates()
+  if mod and mod.setEnabled then
+    ok = pcall(function() mod.setEnabled(cratesEnabled) end)
+  end
+  if not ok then
+    utils.notify("🎁 Crates", "Module missing or failed (crates).", 4)
+  end
+  setBtn(ToggleAutoCratesButton, cratesEnabled, "Auto Open Crates: ")
+end))
+
+-- ------------- Finalize -------------
+utils.notify("🌲 WoodzHUB", "UI ready. Presets fixed; Options restored.", 4)
