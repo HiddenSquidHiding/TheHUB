@@ -1,9 +1,9 @@
--- farm.lua
+-- farm.lua 
 -- Auto-farm with robust hover that survives character swaps.
 -- Weather Events ONLY have a 30s per-target timeout.
 -- NEW: Non-weather mobs that don't lose HP for a short window are skipped.
 
--- 🔧 Utils + constants
+-- 🔧 Utils + data
 local function getUtils()
   local p = script and script.Parent
   if p and p._deps and p._deps.utils then return p._deps.utils end
@@ -11,13 +11,13 @@ local function getUtils()
   error("[farm.lua] utils missing; ensure init.lua injects siblings._deps.utils before loading farm.lua")
 end
 
-local utils      = getUtils()
-local data = require(script.Parent.data_monsters)
+local utils = getUtils()
+local data  = require(script.Parent.data_monsters)  -- ⬅️ switched from constants to data
 
-local Players            = game:GetService("Players")
-local Workspace          = game:GetService("Workspace")
-local ReplicatedStorage  = game:GetService("ReplicatedStorage")
-local RunService         = game:GetService("RunService")
+local Players           = game:GetService("Players")
+local Workspace         = game:GetService("Workspace")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService        = game:GetService("RunService")
 
 local player = Players.LocalPlayer
 
@@ -38,8 +38,8 @@ local allMonsterModels = {}
 local filteredMonsterModels = {}
 local selectedMonsterModels = { "Weather Events" }
 
-local WEATHER_NAMES = constants.weatherEventModels or {}
-local SAHUR_NAMES   = constants.toSahurModels or {}
+local WEATHER_NAMES = (data and data.weatherEventModels) or {}
+local SAHUR_NAMES   = (data and data.toSahurModels) or {}
 
 local function isWeatherName(name)
   local lname = string.lower(name or "")
@@ -94,8 +94,9 @@ function M.getMonsterModels()
     end
   end
 
-  if constants.forcedMonsters then
-    for _, nm in ipairs(constants.forcedMonsters) do pushUnique(valid, nm) end
+  -- include any locally forced names from data
+  if data and data.forcedMonsters then
+    for _, nm in ipairs(data.forcedMonsters) do pushUnique(valid, nm) end
   end
 
   table.insert(valid, "To Sahur")
@@ -185,6 +186,7 @@ end
 -- Remote
 ----------------------------------------------------------------------
 
+local autoAttackRemote = nil  -- ⬅️ ensure declared
 function M.setupAutoAttackRemote()
   autoAttackRemote = nil
   local ok, remote = pcall(function()
