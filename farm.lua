@@ -1,7 +1,7 @@
 -- farm.lua
 -- Auto-farm with robust hover that survives character swaps.
--- Weather Events ONLY have a 30s per-target timeout.
--- NEW: Non-weather mobs that don't lose HP for a short window are skipped.
+-- Weather Events: 30s timeout. Non-weather: skip if HP doesn't drop.
+-- NEW: Instant hop (no glide) by detaching hover, hard-teleporting, zeroing velocity, then reattaching.
 
 -- 🔧 Utils + constants
 local function getUtils()
@@ -27,8 +27,8 @@ local M = {}
 -- Config
 ----------------------------------------------------------------------
 
-local WEATHER_TIMEOUT = 30 -- seconds (Weather Events only)
-local NON_WEATHER_STALL_TIMEOUT = 3 -- seconds without HP decreasing → skip
+local WEATHER_TIMEOUT = 30               -- seconds (Weather Events only)
+local NON_WEATHER_STALL_TIMEOUT = 3      -- seconds without HP decreasing → skip
 
 ----------------------------------------------------------------------
 -- Selection/filter
@@ -266,6 +266,14 @@ function HoverRig:set(pos)
   if self.bp then self.bp.Position = pos end
 end
 
+function HoverRig:detach()
+  if self.bp then self.bp.Parent = nil end
+end
+
+function HoverRig:attachToCurrent()
+  if self.bp and self.currentHRP then self.bp.Parent = self.currentHRP end
+end
+
 function HoverRig:destroy()
   if self.bp then self.bp:Destroy(); self.bp = nil end
   if self.charAddedConn then self.charAddedConn:Disconnect(); self.charAddedConn = nil end
@@ -296,8 +304,41 @@ local function findBasePart(model)
   return nil
 end
 
+-- 🔒 Hard, glide-free teleport:
+--    - Detach hover
+--    - Zero velocities
+--    - PlatformStand true → PivotTo → short yield → PlatformStand false
+--    - Re-attach hover
+local function hardTeleport(hover, cf)
+  local char = player.Character
+  if not char then return end
+  local hum = char:FindFirstChildOfClass("Humanoid")
+  local hrp = char:FindFirstChild("HumanoidRootPart")
+  if not hum or not hrp then return end
+
+  -- detach hover so it doesn't "spring" during the hop
+  if hover then hover:detach() end
+
+  -- kill existing velocity so we don't slide into walls/floors
+  pcall(function()
+    hrp.AssemblyLinearVelocity = Vector3.zero
+    hrp.AssemblyAngularVelocity = Vector3.zero
+  end)
+
+  -- suppress physics interpolation for the instant snap
+  local oldPS = hum.PlatformStand
+  hum.PlatformStand = true
+  char:PivotTo(cf)
+  -- tiny heartbeat to let the transform stick before physics resumes
+  RunService.Heartbeat:Wait()
+  hum.PlatformStand = oldPS
+
+  -- re-attach hover to the current HRP
+  if hover then hover:attachToCurrent() end
+end
+
 ----------------------------------------------------------------------
--- Public: run auto farm (Weather Events: 30s timeout; Non-weather HP stall skip)
+-- Public: run auto farm (Weather timeout + Non-weather stall skip + no glide)
 ----------------------------------------------------------------------
 
 function M.runAutoFarm(flagGetter, setTargetText)
@@ -336,7 +377,7 @@ function M.runAutoFarm(flagGetter, setTargetText)
       local eh = enemy:FindFirstChildOfClass("Humanoid")
       if not eh or eh.Health <= 0 then continue end
 
-      -- teleport near (streaming assist)
+      -- compute a safe target CFrame first
       local okPivot, pcf = pcall(function() return enemy:GetPivot() end)
       local targetCF
       if okPivot and isValidCFrame(pcf) then
@@ -346,20 +387,18 @@ function M.runAutoFarm(flagGetter, setTargetText)
       end
       if not targetCF then continue end
 
-      pcall(function()
-        local ch = player.Character
-        if ch and ch:FindFirstChild("HumanoidRootPart") and ch:FindFirstChildOfClass("Humanoid") and ch.Humanoid.Health > 0 then
-          ch.HumanoidRootPart.CFrame = targetCF
-        end
-      end)
+      -- INSTANT hop (no glide)
+      hardTeleport(hover, targetCF)
 
-      task.wait(0.2)
+      -- brief settle (small; not enough to glide)
+      task.wait(0.05)
 
+      -- Resolve a concrete target part after streaming
       local targetPart = findBasePart(enemy)
       if not targetPart then
         local t0 = tick()
         repeat
-          task.wait(0.05)
+          task.wait(0.03)
           targetPart = findBasePart(enemy)
         until targetPart or (tick() - t0) > 2 or not enemy.Parent or eh.Health <= 0
       end
@@ -378,9 +417,7 @@ function M.runAutoFarm(flagGetter, setTargetText)
 
       local hcConn = eh.HealthChanged:Connect(function(h)
         label(("Current Target: %s (Health: %s)"):format(enemy.Name, math.floor(h)))
-        if h < lastHealth then
-          lastDropAt = tick()
-        end
+        if h < lastHealth then lastDropAt = tick() end
         lastHealth = h
       end)
 
@@ -414,15 +451,15 @@ function M.runAutoFarm(flagGetter, setTargetText)
           break
         end
 
-        task.wait(0.1)
+        task.wait(0.08)
       end
 
       if hcConn then hcConn:Disconnect() end
       label("Current Target: None")
-      task.wait(0.05) -- small breather
+      task.wait(0.03) -- tiny breather
     end
 
-    task.wait(0.1)
+    task.wait(0.08)
   end
 
   hover:destroy()
