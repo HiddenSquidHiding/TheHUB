@@ -1,6 +1,7 @@
 -- farm.lua
--- Auto-farm with smooth constraint-based follow (no glide, no judder).
--- Weather Events: 30s timeout. Non-weather: skip if HP doesn't drop for 3s.
+-- Auto-farm with smooth constraint-based follow (no glide/judder),
+-- Weather Events timeout, non-weather HP-stall skip, and a public
+-- forceRetarget() nudge for the UI presets.
 
 -- 🔧 Utils + constants
 local function getUtils()
@@ -29,9 +30,9 @@ local WEATHER_TIMEOUT               = 30   -- seconds (Weather Events only)
 local NON_WEATHER_STALL_TIMEOUT     = 3    -- seconds without HP decreasing → skip
 local ABOVE_OFFSET                  = Vector3.new(0, 20, 0)
 
--- Constraint tuning (adjust if you ever want snappier/slower follow)
-local POS_RESPONSIVENESS            = 200     -- higher = snappier
-local POS_MAX_FORCE                 = 1e9     -- plenty
+-- Constraint tuning
+local POS_RESPONSIVENESS            = 200
+local POS_MAX_FORCE                 = 1e9
 local ORI_RESPONSIVENESS            = 200
 local ORI_MAX_TORQUE                = 1e9
 
@@ -73,6 +74,12 @@ function M.toggleSelect(name)
 end
 function M.isSelected(name)
   return table.find(selectedMonsterModels, name) ~= nil
+end
+
+-- UI nudge: force the loop to re-evaluate targets immediately
+local _retargetFlag = 0
+function M.forceRetarget()
+  _retargetFlag = tick()
 end
 
 ----------------------------------------------------------------------
@@ -235,7 +242,6 @@ local function zeroVel(hrp)
   end)
 end
 
--- Single, glide-free hop with replication
 local function hardTeleport(cf)
   local char = player.Character
   if not char then return end
@@ -250,16 +256,11 @@ local function hardTeleport(cf)
   hum.PlatformStand = oldPS
 end
 
-----------------------------------------------------------------------
--- Smooth follow via constraints (created once per fight, cleaned each time)
-----------------------------------------------------------------------
 local function makeSmoothFollow(hrp)
-  -- attachments
   local a0 = Instance.new("Attachment")
   a0.Name = "WoodzHub_A0"
   a0.Parent = hrp
 
-  -- AlignPosition
   local ap = Instance.new("AlignPosition")
   ap.Name = "WoodzHub_AP"
   ap.Mode = Enum.PositionAlignmentMode.OneAttachment
@@ -270,7 +271,6 @@ local function makeSmoothFollow(hrp)
   ap.RigidityEnabled = false
   ap.Parent = hrp
 
-  -- AlignOrientation
   local ao = Instance.new("AlignOrientation")
   ao.Name = "WoodzHub_AO"
   ao.Mode = Enum.OrientationAlignmentMode.OneAttachment
@@ -280,17 +280,13 @@ local function makeSmoothFollow(hrp)
   ao.RigidityEnabled = false
   ao.Parent = hrp
 
-  -- controller API
   local ctl = {}
   function ctl:setGoal(cf)
-    -- Use goal position/orientation without second attachment
     ap.Position = cf.Position
-    ao.CFrame = cf.Rotation
+    ao.CFrame  = cf.Rotation
   end
   function ctl:destroy()
-    ap:Destroy()
-    ao:Destroy()
-    a0:Destroy()
+    ap:Destroy(); ao:Destroy(); a0:Destroy()
   end
   return ctl
 end
@@ -308,53 +304,51 @@ function M.runAutoFarm(flagGetter, setTargetText)
     if setTargetText then setTargetText(text) end
   end
 
+  local lastRetargetSeen = _retargetFlag
+
   while flagGetter() do
     local character = utils.waitForCharacter()
     local hum = character:FindFirstChildOfClass("Humanoid")
     local hrp = character:FindFirstChild("HumanoidRootPart")
     if not hum or hum.Health <= 0 or not hrp then
-      label("Current Target: None")
-      task.wait(0.05)
-      continue
+      label("Current Target: None"); task.wait(0.05); continue
     end
 
     local enemies = refreshEnemyList()
     if #enemies == 0 then
-      label("Current Target: None")
-      task.wait(0.1)
-      continue
+      label("Current Target: None"); task.wait(0.1); continue
     end
 
     for _, enemy in ipairs(enemies) do
       if not flagGetter() then break end
+      if _retargetFlag ~= lastRetargetSeen then
+        -- selection changed → start a fresh scan immediately
+        lastRetargetSeen = _retargetFlag
+        break
+      end
+
       if not enemy or not enemy.Parent or Players:GetPlayerFromCharacter(enemy) then continue end
 
       local eh = enemy:FindFirstChildOfClass("Humanoid")
       if not eh or eh.Health <= 0 then continue end
 
-      -- plan initial hop position
       local okPivot, pcf = pcall(function() return enemy:GetPivot() end)
       local targetCF = (okPivot and isValidCFrame(pcf)) and (pcf * CFrame.new(ABOVE_OFFSET)) or nil
       if not targetCF then continue end
 
-      -- instant hop (replicated)
       hardTeleport(targetCF)
 
-      -- reacquire bits
       character = player.Character
       hum = character and character:FindFirstChildOfClass("Humanoid")
       hrp = character and character:FindFirstChild("HumanoidRootPart")
       if not character or not hum or not hrp then continue end
 
-      -- calm physics but keep replication
       local oldPS = hum.PlatformStand
       hum.PlatformStand = true
       zeroVel(hrp)
 
-      -- make smooth controller (constraints)
       local ctl = makeSmoothFollow(hrp)
 
-      -- resolve a concrete part to follow
       local targetPart = findBasePart(enemy)
       if not targetPart then
         local t0 = tick()
@@ -364,14 +358,11 @@ function M.runAutoFarm(flagGetter, setTargetText)
         until targetPart or (tick() - t0) > 2 or not enemy.Parent or eh.Health <= 0
       end
       if not targetPart then
-        hum.PlatformStand = oldPS
-        ctl:destroy()
-        continue
+        hum.PlatformStand = oldPS; ctl:destroy(); continue
       end
 
       label(("Current Target: %s (Health: %s)"):format(enemy.Name, math.floor(eh.Health)))
 
-      -- timers for weather + stall
       local isWeather   = isWeatherName(enemy.Name)
       local lastHealth  = eh.Health
       local lastDropAt  = tick()
@@ -383,29 +374,30 @@ function M.runAutoFarm(flagGetter, setTargetText)
         lastHealth = h
       end)
 
-      -- attack loop
       while flagGetter() and enemy.Parent and eh.Health > 0 do
+        if _retargetFlag ~= lastRetargetSeen then
+          -- selection changed mid-fight → bail to rescan immediately
+          lastRetargetSeen = _retargetFlag
+          break
+        end
+
         local partNow = findBasePart(enemy) or targetPart
         if not partNow then break end
 
-        -- desired pose above enemy (smoothly driven by constraints)
         local desired = partNow.CFrame * CFrame.new(ABOVE_OFFSET)
         ctl:setGoal(desired)
 
-        -- attack
         local hrpTarget = enemy:FindFirstChild("HumanoidRootPart")
         if hrpTarget and autoAttackRemote then
           pcall(function() autoAttackRemote:InvokeServer(hrpTarget.CFrame) end)
         end
 
-        -- Weather-only timeout
         local now = tick()
         if isWeather and (now - startedAt) > WEATHER_TIMEOUT then
           utils.notify("🌲 Auto-Farm", ("Weather Event timeout on %s after %ds."):format(enemy.Name, WEATHER_TIMEOUT), 3)
           break
         end
 
-        -- Non-weather stall detection
         if not isWeather and (now - lastDropAt) > NON_WEATHER_STALL_TIMEOUT then
           utils.notify("🌲 Auto-Farm", ("Skipping %s (no HP change for %0.1fs)"):format(enemy.Name, NON_WEATHER_STALL_TIMEOUT), 3)
           break
@@ -417,12 +409,8 @@ function M.runAutoFarm(flagGetter, setTargetText)
       if hcConn then hcConn:Disconnect() end
       label("Current Target: None")
 
-      -- cleanup + restore
       ctl:destroy()
-      if hum and hum.Parent then
-        hum.PlatformStand = oldPS
-        zeroVel(hrp)
-      end
+      if hum and hum.Parent then hum.PlatformStand = oldPS; zeroVel(hrp) end
 
       RunService.Heartbeat:Wait()
     end
