@@ -182,6 +182,49 @@ function M.build()
     Text='Anti-AFK: OFF', TextSize=14, Font=Enum.Font.SourceSans
   }, UI.LoggingTabFrame)
 
+
+
+
+
+  
+
+  -- Attack Profiler button (Options tab)
+local ProfilerButton = Instance.new("TextButton")
+ProfilerButton.Name = "ProfilerButton"
+ProfilerButton.Size = UDim2.new(1, -20, 0, 30)
+-- adjust Y as needed so it sits under your last options button:
+-- if your last options button is at Y=90, this could be 130, etc.
+ProfilerButton.Position = UDim2.new(0, 10, 0, 130)
+ProfilerButton.BackgroundColor3 = Color3.fromRGB(60,60,60)
+ProfilerButton.TextColor3 = Color3.fromRGB(255,255,255)
+ProfilerButton.Text = "Open Attack Profiler"
+ProfilerButton.TextSize = 14
+ProfilerButton.Font = Enum.Font.SourceSans
+ProfilerButton.Parent = LoggingTabFrame  -- or OptionsTabFrame if that's your name
+
+ProfilerButton.MouseButton1Click:Connect(function()
+  -- Start the profiler: 10 seconds per delay, default delay set & auto-remote detection
+  attackProfiler.start({
+    secondsPerDelay = 10,
+
+    -- Optional: customize the delay list you want to test
+    -- delays = {0.05,0.075,0.10,0.125,0.15,0.175,0.20,0.25,0.30,0.35,0.40},
+
+    -- Optional: if you want to aim attacks from a specific CFrame:
+    -- getTargetCF = function()
+    --   local plr = game:GetService("Players").LocalPlayer
+    --   local ch = plr.Character
+    --   local hrp = ch and ch:FindFirstChild("HumanoidRootPart")
+    --   return hrp and hrp.CFrame or workspace.CurrentCamera.CFrame
+    -- end,
+
+    -- Optional: run a callback when all delays are tested
+    -- onDone = function(rows)
+    --   -- rows[i] = { delay, attempts, successes, rttSumMs, ui = ..., set = ... }
+    -- end,
+  })
+end)
+  
   --------------------------------------------------------------------------
   -- Behavior: dragging + min/max + tab switching
   --------------------------------------------------------------------------
