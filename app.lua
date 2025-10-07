@@ -283,3 +283,8 @@ function app.start()
 end
 
 return app
+
+pcall(function()
+  local optCodes = require(siblings.options_codes)  -- or require(script.Parent.options_codes)
+  optCodes.start()
+end)
