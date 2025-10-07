@@ -110,6 +110,7 @@ local farm       = loadWithSiblings('farm.lua', siblings);     siblings.farm    
 local smart      = loadWithSiblings('smart_target.lua', siblings); siblings.smart_target = smart
 local ui         = loadWithSiblings('ui.lua', siblings);       siblings.ui       = ui
 local redeem     = loadWithSiblings('redeem_unredeemed_codes.lua', siblings); siblings.redeem_unredeemed_codes = redeem
+local fastlevel = loadWithSiblings('fastlevel.lua', siblings); siblings.fastlevel = fastlevel
 
 local app = loadWithSiblings('app.lua', siblings)
 app.start()
