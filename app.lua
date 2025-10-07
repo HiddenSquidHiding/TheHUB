@@ -282,9 +282,4 @@ function app.start()
   end))
 end
 
-pcall(function()
-  local optCodes = require(script.Parent.options_codes)  -- or require(script.Parent.options_codes)
-  optCodes.start()
-end)
-
 return app
