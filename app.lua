@@ -18,14 +18,9 @@ local crates     = require(script.Parent.crates)
 local antiAFK    = require(script.Parent.anti_afk)
 local smartFarm  = require(script.Parent.smart_target)
 
--- ✅ NEW: codes options injector (adds Preview/Redeem buttons to Options tab)
-local codesOptions = nil
-pcall(function()
-  codesOptions = require(script.Parent.options_codes)
-end)
-
 -- ✅ Needed for MonsterInfo lookup
 local ReplicatedStorage = game:GetService('ReplicatedStorage')
+local Players = game:GetService('Players')
 
 local app = {}
 
@@ -66,7 +61,6 @@ local function resolveMonsterInfo()
     {"Configs","MonsterInfo"},
   }
 
-  -- Try listed paths (with short WaitForChild fallback)
   for _, path in ipairs(candidatePaths) do
     local node = RS
     local ok = true
@@ -79,7 +73,6 @@ local function resolveMonsterInfo()
     end
   end
 
-  -- Last resort: scan descendants for a ModuleScript named "MonsterInfo"
   for _, d in ipairs(RS:GetDescendants()) do
     if d:IsA("ModuleScript") and d.Name == "MonsterInfo" then
       return d
@@ -88,30 +81,151 @@ local function resolveMonsterInfo()
   return nil
 end
 
+-- =========================
+-- CODES BUTTONS INJECTION
+-- =========================
+
+local function deepFind(root, wanted)
+  if not root then return nil end
+  if root.Name == wanted then return root end
+  for _, d in ipairs(root:GetDescendants()) do
+    if d.Name == wanted then return d end
+  end
+  return nil
+end
+
+local function findOptionsContainer(UIRef)
+  -- Prefer explicit exposed frame
+  if UIRef and UIRef.LoggingTabFrame then return UIRef.LoggingTabFrame end
+  -- Fallback: search inside ScreenGui
+  if UIRef and UIRef.ScreenGui then
+    return deepFind(UIRef.ScreenGui, "LoggingTabFrame")
+        or deepFind(UIRef.ScreenGui, "OptionsFrame")
+        or deepFind(UIRef.ScreenGui, "OptionsTab")
+  end
+  -- Last resort: search PlayerGui
+  local pg = Players.LocalPlayer:FindFirstChildOfClass("PlayerGui")
+  if not pg then return nil end
+  local hub = pg:FindFirstChild("WoodzHUB")
+  if hub then
+    return deepFind(hub, "LoggingTabFrame")
+        or deepFind(hub, "OptionsFrame")
+        or deepFind(hub, "OptionsTab")
+  end
+  for _, sg in ipairs(pg:GetChildren()) do
+    if sg:IsA("ScreenGui") then
+      local hit = deepFind(sg, "LoggingTabFrame")
+              or deepFind(sg, "OptionsFrame")
+              or deepFind(sg, "OptionsTab")
+      if hit then return hit end
+    end
+  end
+  return nil
+end
+
+local function injectCodesButtons(container)
+  if not container then
+    utils.notify("Codes", "Options tab not found; cannot inject codes buttons", 4)
+    return
+  end
+
+  -- Require logic module
+  local codesLogic
+  do
+    local ok, mod = pcall(function() return require(script.Parent.redeem_unredeemed_codes) end)
+    if not ok or type(mod) ~= "table" or type(mod.run) ~= "function" then
+      utils.notify("Codes", "redeem_unredeemed_codes.lua missing or invalid; cannot add buttons", 4)
+      return
+    end
+    codesLogic = mod
+  end
+
+  -- Avoid duplicates
+  if container:FindFirstChild("Woodz_CodesRow") then
+    return
+  end
+
+  local row = utils.new("Frame", {
+    Name = "Woodz_CodesRow",
+    BackgroundTransparency = 1,
+    Size = UDim2.new(1, -20, 0, 36),
+    AnchorPoint = Vector2.new(0, 1),
+    Position = UDim2.new(0, 10, 1, -46),
+  }, container)
+
+  utils.new("UIListLayout", {
+    FillDirection = Enum.FillDirection.Horizontal,
+    HorizontalAlignment = Enum.HorizontalAlignment.Left,
+    VerticalAlignment = Enum.VerticalAlignment.Center,
+    Padding = UDim.new(0, 10),
+  }, row)
+
+  local function mkBtn(text)
+    return utils.new("TextButton", {
+      BackgroundColor3 = constants.COLOR_BTN,
+      TextColor3       = constants.COLOR_WHITE,
+      Font             = Enum.Font.SourceSans,
+      TextSize         = 14,
+      Size             = UDim2.new(0, 200, 0, 32),
+      AutoButtonColor  = true,
+      Text             = text,
+    }, row)
+  end
+
+  local previewBtn = mkBtn("Preview Unredeemed Codes")
+  local redeemBtn  = mkBtn("Redeem Unredeemed Codes")
+
+  utils.track(previewBtn.MouseButton1Click:Connect(function()
+    task.spawn(function()
+      utils.notify("Codes", "Previewing unredeemed codes…", 2.5)
+      local ok = codesLogic.run({ dryRun = true })
+      if ok then
+        utils.notify("Codes", "Preview complete — check console.", 3)
+      else
+        utils.notify("Codes", "Preview failed — check console.", 3)
+      end
+    end)
+  end))
+
+  utils.track(redeemBtn.MouseButton1Click:Connect(function()
+    task.spawn(function()
+      utils.notify("Codes", "Redeeming unredeemed codes…", 2.5)
+      local ok = codesLogic.run({ dryRun = false, concurrent = true, delayBetween = 0.25 })
+      if ok then
+        utils.notify("Codes", "Redeem run finished — see console.", 3)
+      else
+        utils.notify("Codes", "Redeem failed — see console.", 3)
+      end
+    end)
+  end))
+
+  -- If it's a ScrollingFrame, extend canvas so row is reachable
+  if container:IsA("ScrollingFrame") then
+    local current = container.CanvasSize
+    container.CanvasSize = UDim2.new(0, 0, 0, (current.Y.Offset or 0) + 60)
+  end
+
+  utils.notify("Codes", "Options tab: added Preview/Redeem buttons.", 3)
+end
+
 function app.start()
   UI = uiModule.build()
 
-  ------------------------------------------------------------------
-  -- Inject Codes buttons into Options tab (reliable timing)
-  ------------------------------------------------------------------
-  if codesOptions then
-    task.defer(function()
-      local ok, err = pcall(function()
-        if UI and UI.LoggingTabFrame and codesOptions.startWithContainer then
-          -- Fast path: we already have the container ref
-          codesOptions.startWithContainer(UI.LoggingTabFrame)
-        elseif codesOptions.start then
-          -- Fallback: let the injector find the Options tab with retry
-          codesOptions.start()
-        end
-      end)
-      if not ok then
-        utils.notify("Codes", "Options inject failed: "..tostring(err), 4)
+  -- ---- Inject Codes buttons after UI exists ----
+  task.defer(function()
+    -- small defer so descendants exist
+    task.wait(0.1)
+    local container = findOptionsContainer(UI)
+    if not container then
+      -- try a bit longer in case the Options tab is created after
+      local t0 = os.clock()
+      while not container and (os.clock() - t0) < 5 do
+        task.wait(0.25)
+        container = findOptionsContainer(UI)
       end
-    end)
-  else
-    utils.notify("Codes", "options_codes.lua missing or failed to require()", 4)
-  end
+    end
+    injectCodesButtons(container)
+  end)
 
   ------------------------------------------------------------------
   -- Build model list, search, presets
