@@ -181,6 +181,17 @@ function M.build()
     BackgroundColor3=constants.COLOR_BTN, TextColor3=constants.COLOR_WHITE,
     Text='Anti-AFK: OFF', TextSize=14, Font=Enum.Font.SourceSans
   }, UI.LoggingTabFrame)
+
+  UI.RedeemCodesButton = utils.new('TextButton', {
+    Size = UDim2.new(1, -20, 0, 30),
+    Position = UDim2.new(0, 10, 0, 170),
+    BackgroundColor3 = constants.COLOR_BTN,
+    TextColor3 = constants.COLOR_WHITE,
+    Text = 'Redeem Codes',
+    TextSize = 14,
+    Font = Enum.Font.SourceSans
+  }, UI.LoggingTabFrame)
+
   
   --------------------------------------------------------------------------
   -- Behavior: dragging + min/max + tab switching
@@ -261,11 +272,5 @@ function M.build()
   return UI
 
 end
-
-  -- anywhere after your GUI is created
-task.defer(function()
-  local ok, mod = pcall(function() return require(script.Parent.options_codes) end)
-  if ok and mod and mod.start then mod.start() end
-end)
 
 return M
