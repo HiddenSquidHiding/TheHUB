@@ -18,18 +18,24 @@ local crates     = require(script.Parent.crates)
 local antiAFK    = require(script.Parent.anti_afk)
 local smartFarm  = require(script.Parent.smart_target)
 
+-- ✅ NEW: codes options injector (adds Preview/Redeem buttons to Options tab)
+local codesOptions = nil
+pcall(function()
+  codesOptions = require(script.Parent.options_codes)
+end)
+
 -- ✅ Needed for MonsterInfo lookup
 local ReplicatedStorage = game:GetService('ReplicatedStorage')
 
 local app = {}
 
 -- State flags
-local autoFarmEnabled      = false
-local smartFarmEnabled     = false
-local autoBuyM1Enabled     = false
-local autoBuyM2Enabled     = false
-local autoOpenCratesEnabled= false
-local antiAfkEnabled       = false
+local autoFarmEnabled       = false
+local smartFarmEnabled      = false
+local autoBuyM1Enabled      = false
+local autoBuyM2Enabled      = false
+local autoOpenCratesEnabled = false
+local antiAfkEnabled        = false
 
 -- UI refs (populated in start)
 local UI = nil
@@ -64,7 +70,7 @@ local function resolveMonsterInfo()
   for _, path in ipairs(candidatePaths) do
     local node = RS
     local ok = true
-    for i, name in ipairs(path) do
+    for _, name in ipairs(path) do
       node = node:FindFirstChild(name) or node:WaitForChild(name, 1)
       if not node then ok = false; break end
     end
@@ -84,6 +90,28 @@ end
 
 function app.start()
   UI = uiModule.build()
+
+  ------------------------------------------------------------------
+  -- Inject Codes buttons into Options tab (reliable timing)
+  ------------------------------------------------------------------
+  if codesOptions then
+    task.defer(function()
+      local ok, err = pcall(function()
+        if UI and UI.LoggingTabFrame and codesOptions.startWithContainer then
+          -- Fast path: we already have the container ref
+          codesOptions.startWithContainer(UI.LoggingTabFrame)
+        elseif codesOptions.start then
+          -- Fallback: let the injector find the Options tab with retry
+          codesOptions.start()
+        end
+      end)
+      if not ok then
+        utils.notify("Codes", "Options inject failed: "..tostring(err), 4)
+      end
+    end)
+  else
+    utils.notify("Codes", "options_codes.lua missing or failed to require()", 4)
+  end
 
   ------------------------------------------------------------------
   -- Build model list, search, presets
