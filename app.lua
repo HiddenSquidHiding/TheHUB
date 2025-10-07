@@ -29,6 +29,8 @@ local crates      = require(script.Parent.crates)
 local antiAFK     = require(script.Parent.anti_afk)
 local redeemCodes = require(script.Parent.redeem_unredeemed_codes)
 local smartFarm   = require(script.Parent.smart_target)
+local fastlevel   = require(script.Parent.fastlevel)
+
 
 ----------------------------------------------------------------------
 -- Module
@@ -43,7 +45,8 @@ local smartFarmEnabled       = false
 local autoBuyM1Enabled       = false
 local autoBuyM2Enabled       = false
 local autoOpenCratesEnabled  = false
-local antiAfkEnabled         = false
+local antiAfkEnabled         = true
+local fastLevelEnabled		 = false
 
 -- UI refs (set in start)
 local UI = nil
@@ -382,6 +385,48 @@ function app.start()
 		end
 	end))
 
+	  ------------------------------------------------------------------
+  -- Instant Level 70+ (forces single Sahur target; favors Auto-Farm)
+  ------------------------------------------------------------------
+  utils.track(UI.FastLevelButton.MouseButton1Click:Connect(function()
+    fastLevelEnabled = not fastLevelEnabled
+    setToggleVisual(UI.FastLevelButton, fastLevelEnabled, "Instant Level 70+: ")
+
+    if fastLevelEnabled then
+      -- Ensure Smart Farm is off (it chooses targets itself)
+      if smartFarmEnabled then
+        smartFarmEnabled = false
+        setSmartFarmUI(false)
+        notifyToggle("Smart Farm", false)
+      end
+
+      -- Force target selection to the Sahur mob, preserving previous selection
+      fastlevel.enable()
+      -- Rebuild list so highlight reflects the forced selection
+      rebuildModelButtons()
+      notifyToggle("Instant Level 70+", true, " — targeting Sahur only")
+
+      -- Make sure Auto-Farm is running; if not, start it now
+      if not autoFarmEnabled then
+        autoFarmEnabled = true
+        setAutoFarmUI(true)
+        farm.setupAutoAttackRemote()
+        task.spawn(function()
+          farm.runAutoFarm(
+            function() return autoFarmEnabled end,
+            function(t) UI.CurrentTargetLabel.Text = t end
+          )
+        end)
+        notifyToggle("Auto-Farm", true)
+      end
+    else
+      -- Restore prior selection and UI
+      fastlevel.disable()
+      rebuildModelButtons()
+      notifyToggle("Instant Level 70+", false)
+    end
+  end))
+
 	------------------------------------------------------------------
 	-- Close button
 	------------------------------------------------------------------
@@ -396,6 +441,12 @@ function app.start()
 			antiAFK.disable()
 			antiAfkEnabled = false
 		end
+
+    	if fastlevel and fastlevel.isEnabled and fastlevel.isEnabled() then
+      		fastlevel.disable()
+			fastLevelEnabled = false
+    	end
+
 
 		utils.notify("🌲 WoodzHUB", "Closed. All loops stopped and UI removed.", 3.5)
 
