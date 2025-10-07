@@ -45,7 +45,7 @@ local smartFarmEnabled       = false
 local autoBuyM1Enabled       = false
 local autoBuyM2Enabled       = false
 local autoOpenCratesEnabled  = false
-local antiAfkEnabled         = true
+local antiAfkEnabled         = false
 local fastLevelEnabled		 = false
 
 -- UI refs (set in start)
