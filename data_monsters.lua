@@ -34,6 +34,7 @@ return {
     "Los CrocodiIIitos",
     "Crocodillitos Crate",
     "Pipi Kiwi Boss",
+    "Los OrcoIocos",
   },
 
   forcedMonsters = {
