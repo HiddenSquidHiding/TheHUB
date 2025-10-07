@@ -192,6 +192,11 @@ function M.build()
     Font = Enum.Font.SourceSans
   }, UI.LoggingTabFrame)
 
+    UI.FastLevelButton = utils.new('TextButton', {
+    Size = UDim2.new(1,-20,0,30), Position = UDim2.new(0,10,0,210),
+    BackgroundColor3 = constants.COLOR_BTN, TextColor3 = constants.COLOR_WHITE,
+    Text = 'Instant Level 70+: OFF', TextSize = 14, Font = Enum.Font.SourceSans
+  }, UI.LoggingTabFrame)
   
   --------------------------------------------------------------------------
   -- Behavior: dragging + min/max + tab switching
