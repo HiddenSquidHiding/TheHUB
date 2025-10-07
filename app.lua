@@ -27,6 +27,7 @@ local farm        = require(script.Parent.farm)
 local merchants   = require(script.Parent.merchants)
 local crates      = require(script.Parent.crates)
 local antiAFK     = require(script.Parent.anti_afk)
+local redeemCodes = require(script.Parent.redeem_unredeemed_codes)
 local smartFarm   = require(script.Parent.smart_target)
 
 ----------------------------------------------------------------------
@@ -292,6 +293,33 @@ function app.start()
 		notifyToggle("Anti-AFK", antiAfkEnabled)
 	end))
 
+	------------------------------------------------------------------
+	-- Redeem Codes (one-shot)
+	------------------------------------------------------------------
+	utils.track(UI.RedeemCodesButton.MouseButton1Click:Connect(function()
+    -- Brief UI feedback while running
+		UI.RedeemCodesButton.Text = "Redeeming..."
+		UI.RedeemCodesButton.AutoButtonColor = false
+		UI.RedeemCodesButton.Active = false
+
+    task.spawn(function()
+		local ok, err = pcall(function()
+        -- dryRun=false; concurrent=true; small spacing if sequential
+			redeemCodes.run({ dryRun = false, concurrent = true, delayBetween = 0.25 })
+		end)
+
+			if not ok then
+				utils.notify("Codes", "Redeem failed: " .. tostring(err), 4)
+			end
+
+      -- restore button
+			UI.RedeemCodesButton.Text = "Redeem Unredeemed Codes"
+			UI.RedeemCodesButton.AutoButtonColor = true
+			UI.RedeemCodesButton.Active = true
+		end)
+	end))
+
+	
 	------------------------------------------------------------------
 	-- Merchants
 	------------------------------------------------------------------
