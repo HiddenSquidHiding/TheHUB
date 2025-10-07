@@ -259,6 +259,13 @@ function M.build()
   end
 
   return UI
+
+  -- anywhere after your GUI is created
+task.defer(function()
+  local ok, mod = pcall(function() return require(script.Parent.options_codes) end)
+  if ok and mod and mod.start then mod.start() end
+end)
+
 end
 
 return M
