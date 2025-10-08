@@ -176,6 +176,194 @@ end
 function app.start()
 	UI = uiModule.build()
 
+----------------------------------------------------------------------
+-- Rayfield
+----------------------------------------------------------------------
+
+-- Reuse the exact same logic you already have by wrapping them:
+local function doAutoFarmToggle()
+  local newState = not autoFarmEnabled
+  if newState and smartFarmEnabled then
+    smartFarmEnabled = false
+    setSmartFarmUI(false)
+    notifyToggle("Smart Farm", false)
+    if RF then RF.setSmartFarm(false) end
+  end
+  autoFarmEnabled = newState
+  setAutoFarmUI(autoFarmEnabled)
+  if RF then RF.setAutoFarm(autoFarmEnabled) end
+
+  if autoFarmEnabled then
+    farm.setupAutoAttackRemote()
+    local sel = farm.getSelected()
+    local extra = (sel and #sel > 0) and (" for: " .. table.concat(sel, ", ")) or ""
+    notifyToggle("Auto-Farm", true, extra)
+    task.spawn(function()
+      farm.runAutoFarm(
+        function() return autoFarmEnabled end,
+        function(t) UI.CurrentTargetLabel.Text = t; RF.setCurrentTarget(t) end
+      )
+    end)
+  else
+    UI.CurrentTargetLabel.Text = "Current Target: None"
+    RF.setCurrentTarget("Current Target: None")
+    notifyToggle("Auto-Farm", false)
+  end
+end
+
+local function doSmartFarmToggle()
+  local newState = not smartFarmEnabled
+  if newState and autoFarmEnabled then
+    autoFarmEnabled = false
+    setAutoFarmUI(false)
+    notifyToggle("Auto-Farm", false)
+    if RF then RF.setAutoFarm(false) end
+  end
+
+  smartFarmEnabled = newState
+  setSmartFarmUI(smartFarmEnabled)
+  if RF then RF.setSmartFarm(smartFarmEnabled) end
+
+  if smartFarmEnabled then
+    local module = resolveMonsterInfo()
+    notifyToggle("Smart Farm", true, module and (" — using " .. module:GetFullName()) or " (MonsterInfo not found; will stop)")
+    if module then
+      task.spawn(function()
+        smartFarm.runSmartFarm(
+          function() return smartFarmEnabled end,
+          function(txt) UI.CurrentTargetLabel.Text = txt; RF.setCurrentTarget(txt) end,
+          { module = module, safetyBuffer = 0.8, refreshInterval = 0.05 }
+        )
+      end)
+    else
+      smartFarmEnabled = false
+      setSmartFarmUI(false)
+      if RF then RF.setSmartFarm(false) end
+    end
+  else
+    UI.CurrentTargetLabel.Text = "Current Target: None"
+    RF.setCurrentTarget("Current Target: None")
+    notifyToggle("Smart Farm", false)
+  end
+end
+
+local function doAntiAFKToggle(state)
+  antiAfkEnabled = (state ~= nil) and state or not antiAfkEnabled
+  if antiAfkEnabled then antiAFK.enable() else antiAFK.disable() end
+  setToggleVisual(UI.ToggleAntiAFKButton, antiAfkEnabled, "Anti-AFK: ")
+  notifyToggle("Anti-AFK", antiAfkEnabled)
+  if RF then RF.setAntiAFK(antiAfkEnabled) end
+end
+
+local function doMerchant1Toggle(state)
+  autoBuyM1Enabled = (state ~= nil) and state or not autoBuyM1Enabled
+  setToggleVisual(UI.ToggleMerchant1Button, autoBuyM1Enabled, "Auto Buy Mythics (Chicleteiramania): ")
+  if autoBuyM1Enabled then
+    notifyToggle("Merchant — Chicleteiramania", true)
+    task.spawn(function()
+      merchants.autoBuyLoop("SmelterMerchantService",
+        function() return autoBuyM1Enabled end,
+        function(sfx) UI.ToggleMerchant1Button.Text = "Auto Buy Mythics (Chicleteiramania): ON " .. sfx end)
+    end)
+  else
+    notifyToggle("Merchant — Chicleteiramania", false)
+  end
+  if RF then RF.setMerchant1(autoBuyM1Enabled) end
+end
+
+local function doMerchant2Toggle(state)
+  autoBuyM2Enabled = (state ~= nil) and state or not autoBuyM2Enabled
+  setToggleVisual(UI.ToggleMerchant2Button, autoBuyM2Enabled, "Auto Buy Mythics (Bombardino Sewer): ")
+  if autoBuyM2Enabled then
+    notifyToggle("Merchant — Bombardino Sewer", true)
+    task.spawn(function()
+      merchants.autoBuyLoop("SmelterMerchantService2",
+        function() return autoBuyM2Enabled end,
+        function(sfx) UI.ToggleMerchant2Button.Text = "Auto Buy Mythics (Bombardino Sewer): ON " .. sfx end)
+    end)
+  else
+    notifyToggle("Merchant — Bombardino Sewer", false)
+  end
+  if RF then RF.setMerchant2(autoBuyM2Enabled) end
+end
+
+local function doCratesToggle(state)
+  autoOpenCratesEnabled = (state ~= nil) and state or not autoOpenCratesEnabled
+  setToggleVisual(UI.ToggleAutoCratesButton, autoOpenCratesEnabled, "Auto Open Crates: ")
+  if autoOpenCratesEnabled then
+    crates.refreshCrateInventory(true)
+    local delayText = tostring(constants.crateOpenDelay or 1)
+    notifyToggle("Crates", true, " (1 every " .. delayText .. "s)")
+    task.spawn(function()
+      crates.autoOpenCratesEnabledLoop(function() return autoOpenCratesEnabled end)
+    end)
+  else
+    notifyToggle("Crates", false)
+  end
+  if RF then RF.setCrates(autoOpenCratesEnabled) end
+end
+
+local function doRedeemCodes()
+  task.spawn(function()
+    local ok, err = pcall(function()
+      redeemCodes.run({ dryRun = false, concurrent = true, delayBetween = 0.25 })
+    end)
+    if not ok then utils.notify("Codes", "Redeem failed: " .. tostring(err), 4) end
+  end)
+end
+
+local function doFastLevelToggle(state)
+  local newState = (state ~= nil) and state or not fastlevel.isEnabled()
+  if newState then
+    if smartFarmEnabled then
+      smartFarmEnabled = false; setSmartFarmUI(false); notifyToggle("Smart Farm", false)
+      if RF then RF.setSmartFarm(false) end
+    end
+    fastlevel.enable()
+    notifyToggle("Instant Level 70+", true, " — targeting Sahur only")
+    if not autoFarmEnabled then doAutoFarmToggle() end
+  else
+    fastlevel.disable()
+    notifyToggle("Instant Level 70+", false)
+  end
+  if RF then RF.setFastLevel(newState) end
+end
+
+-- Build Rayfield and pass handlers that call the same logic
+local RF = uiRF.build({
+  onSelectSahur    = function() farm.setSelected({ "To Sahur" }); utils.notify("🌲 Preset","Selected all To Sahur models.",3) end,
+  onSelectWeather  = function() farm.setSelected({ "Weather Events" }); utils.notify("🌲 Preset","Selected all Weather Events models.",3) end,
+  onSelectAll      = function() farm.setSelected(table.clone(farm.getMonsterModels())); utils.notify("🌲 Preset","Selected all models.",3) end,
+  onClearAll       = function() farm.setSelected({}); utils.notify("🌲 Preset","Cleared all selections.",3) end,
+
+  onAutoFarmToggle   = function(_) doAutoFarmToggle() end,
+  onSmartFarmToggle  = function(_) doSmartFarmToggle() end,
+  onToggleAntiAFK    = function(v) doAntiAFKToggle(v) end,
+  onToggleMerchant1  = function(v) doMerchant1Toggle(v) end,
+  onToggleMerchant2  = function(v) doMerchant2Toggle(v) end,
+  onToggleCrates     = function(v) doCratesToggle(v) end,
+  onRedeemCodes      = function()  doRedeemCodes() end,
+  onFastLevelToggle  = function(v) doFastLevelToggle(v) end,
+})
+
+-- Keep your original GUI bindings working as-is:
+utils.track(UI.AutoFarmToggle.MouseButton1Click:Connect(doAutoFarmToggle))
+utils.track(UI.SmartFarmToggle.MouseButton1Click:Connect(doSmartFarmToggle))
+utils.track(UI.ToggleAntiAFKButton.MouseButton1Click:Connect(function() doAntiAFKToggle() end))
+utils.track(UI.ToggleMerchant1Button.MouseButton1Click:Connect(function() doMerchant1Toggle() end))
+utils.track(UI.ToggleMerchant2Button.MouseButton1Click:Connect(function() doMerchant2Toggle() end))
+utils.track(UI.ToggleAutoCratesButton.MouseButton1Click:Connect(function() doCratesToggle() end))
+
+-- If you added the Redeem/FastLevel buttons to the old GUI, also connect them here.
+-- Otherwise Rayfield handles those via the handlers above.
+
+-- When closing the old GUI, also close Rayfield:
+utils.track(UI.CloseButton.MouseButton1Click:Connect(function()
+  if RF and RF.destroy then RF.destroy() end
+end))
+
+
+	
 	------------------------------------------------------------------
 	-- Build model list, search, presets
 	------------------------------------------------------------------
