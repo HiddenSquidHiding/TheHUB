@@ -30,6 +30,7 @@ local antiAFK     = require(script.Parent.anti_afk)
 local redeemCodes = require(script.Parent.redeem_unredeemed_codes)
 local smartFarm   = require(script.Parent.smart_target)
 local fastlevel   = require(script.Parent.fastlevel)
+local uiRF        = require(script.Parent.ui_rayfield)
 
 
 ----------------------------------------------------------------------
