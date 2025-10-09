@@ -179,7 +179,7 @@ function M.build(handlers)
   Name = "Private Server",
   Callback = function()
     task.spawn(function()
-      if not TeleportToPrivateServer then
+      if not _G.TeleportToPrivateServer then
         utils.notify("🌲 Private Server", "Run solo.lua first to set up the function!", 4)
         return
       end
