@@ -16,6 +16,9 @@ local farm      = require(script.Parent.farm)   -- used for model picker
 
 local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
 
+local Players = game:GetService("Players")
+local CoreGui = game:GetService("CoreGui")
+
 local M = {}
 
 function M.build(handlers)
@@ -70,7 +73,7 @@ function M.build(handlers)
     syncDropdownSelectionFromFarm()
   end
 
-  local searchInput = MainTab:CreateInput({
+  MainTab:CreateInput({
     Name = "Search Models",
     PlaceholderText = "Type model names to filter…",
     RemoveTextAfterFocusLost = false,
@@ -105,87 +108,102 @@ function M.build(handlers)
   --------------------------------------------------------------------------
   MainTab:CreateSection("Presets")
 
-  -- We make a tiny placeholder to discover the section's container, then replace it with our row.
-  local placeholder = MainTab:CreateLabel(" ")  -- invisible-ish line
-  local presetsParent = nil
-  pcall(function()
-    -- Try common Rayfield object shapes
-    presetsParent = (placeholder.Label and placeholder.Label.Parent)
-                 or (placeholder.Parent)
-  end)
-
-  -- Create the row inside the discovered container, then remove placeholder
-  do
-    local parent = presetsParent
-    if parent then
-      local row = Instance.new("Frame")
-      row.Name = "Woodz_PresetsRow"
-      row.BackgroundTransparency = 1
-      row.Size = UDim2.new(1, 0, 0, 40)
-      row.Parent = parent
-
-      local layout = Instance.new("UIListLayout")
-      layout.FillDirection = Enum.FillDirection.Horizontal
-      layout.HorizontalAlignment = Enum.HorizontalAlignment.Center
-      layout.VerticalAlignment = Enum.VerticalAlignment.Center
-      layout.Padding = UDim.new(0, 8)
-      layout.Parent = row
-
-      local function mkBtn(text, cb)
-        local btn = Instance.new("TextButton")
-        btn.AutoButtonColor = true
-        btn.Text = text
-        btn.Font = Enum.Font.SourceSans
-        btn.TextSize = 14
-        btn.TextColor3 = Color3.fromRGB(235,235,235)
-        btn.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
-        btn.Size = UDim2.new(1/3, -8, 1, 0) -- three buttons across, with padding
-        btn.Parent = row
-
-        local corner = Instance.new("UICorner")
-        corner.CornerRadius = UDim.new(0, 6)
-        corner.Parent = btn
-
-        local stroke = Instance.new("UIStroke")
-        stroke.Thickness = 1
-        stroke.Transparency = 0.3
-        stroke.Color = Color3.fromRGB(90, 90, 90)
-        stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
-        stroke.Parent = btn
-
-        btn.MouseButton1Click:Connect(function()
-          task.spawn(function()
-            pcall(cb)
-          end)
-        end)
-      end
-
-      mkBtn("Select To Sahur", function()
-        if handlers.onSelectSahur then handlers.onSelectSahur() end
-        syncDropdownSelectionFromFarm()
-        utils.notify("🌲 Preset", "Selected all To Sahur models.", 3)
-      end)
-
-      mkBtn("Select Weather", function()
-        if handlers.onSelectWeather then handlers.onSelectWeather() end
-        syncDropdownSelectionFromFarm()
-        utils.notify("🌲 Preset", "Selected all Weather Events models.", 3)
-      end)
-
-      mkBtn("Clear All", function()
-        if handlers.onClearAll then handlers.onClearAll() end
-        syncDropdownSelectionFromFarm()
-        utils.notify("🌲 Preset", "Cleared all selections.", 3)
-      end)
-
-      -- Remove placeholder line now that our row exists
-      pcall(function()
-        if placeholder.Label then
-          placeholder.Label:Destroy()
-        end
-      end)
-    end
+  -- Robustly find the "Presets" section container Rayfield created, then inject a row into it.
+  local function findRayfieldRoot()
+    return CoreGui:FindFirstChild("Rayfield") or Players.LocalPlayer:FindFirstChildOfClass("PlayerGui") and Players.LocalPlayer.PlayerGui:FindFirstChild("Rayfield")
   end
+
+  local function findPresetsContainer()
+    local root = findRayfieldRoot()
+    if not root then return nil end
+    local header
+    for _, d in ipairs(root:GetDescendants()) do
+      if d:IsA("TextLabel") then
+        local txt = tostring(d.Text or ""):lower()
+        if txt == "presets" then
+          header = d
+          break
+        end
+      end
+    end
+    if not header then return nil end
+    -- Rayfield typically places section header labels directly under the section container
+    return header.Parent
+  end
+
+  local function injectThreeButtonRow()
+    -- Try repeatedly for a short time in case Rayfield is still laying out
+    for _=1,30 do
+      local container = findPresetsContainer()
+      if container and not container:FindFirstChild("Woodz_PresetsRow") then
+        local row = Instance.new("Frame")
+        row.Name = "Woodz_PresetsRow"
+        row.BackgroundTransparency = 1
+        row.Size = UDim2.new(1, 0, 0, 40)
+        row.Parent = container
+
+        local layout = Instance.new("UIListLayout")
+        layout.FillDirection = Enum.FillDirection.Horizontal
+        layout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+        layout.VerticalAlignment = Enum.VerticalAlignment.Center
+        layout.Padding = UDim.new(0, 8)
+        layout.Parent = row
+
+        local function mkBtn(text, cb)
+          local btn = Instance.new("TextButton")
+          btn.AutoButtonColor = true
+          btn.Text = text
+          btn.Font = Enum.Font.SourceSans
+          btn.TextSize = 14
+          btn.TextColor3 = Color3.fromRGB(235,235,235)
+          btn.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+          btn.Size = UDim2.new(1/3, -8, 1, 0) -- 3 buttons across with padding
+          btn.Parent = row
+
+          local corner = Instance.new("UICorner")
+          corner.CornerRadius = UDim.new(0, 6)
+          corner.Parent = btn
+
+          local stroke = Instance.new("UIStroke")
+          stroke.Thickness = 1
+          stroke.Transparency = 0.3
+          stroke.Color = Color3.fromRGB(90, 90, 90)
+          stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+          stroke.Parent = btn
+
+          btn.MouseButton1Click:Connect(function()
+            task.spawn(function()
+              pcall(cb)
+            end)
+          end)
+        end
+
+        mkBtn("Select To Sahur", function()
+          if handlers.onSelectSahur then handlers.onSelectSahur() end
+          syncDropdownSelectionFromFarm()
+          utils.notify("🌲 Preset", "Selected all To Sahur models.", 3)
+        end)
+
+        mkBtn("Select Weather", function()
+          if handlers.onSelectWeather then handlers.onSelectWeather() end
+          syncDropdownSelectionFromFarm()
+          utils.notify("🌲 Preset", "Selected all Weather Events models.", 3)
+        end)
+
+        mkBtn("Clear All", function()
+          if handlers.onClearAll then handlers.onClearAll() end
+          syncDropdownSelectionFromFarm()
+          utils.notify("🌲 Preset", "Cleared all selections.", 3)
+        end)
+
+        return true
+      end
+      task.wait(0.1)
+    end
+    return false
+  end
+
+  task.spawn(injectThreeButtonRow)
 
   --------------------------------------------------------------------------
   -- Toggles (farming)
@@ -249,7 +267,6 @@ function M.build(handlers)
 
   -- Optional: apply HUD hiding like old UI
   do
-    local Players = game:GetService("Players")
     local StarterGui = game:GetService("StarterGui")
     local flags = { premiumHidden=true, vipHidden=true, limitedPetHidden=true }
     local pg = Players.LocalPlayer:FindFirstChildOfClass("PlayerGui")
@@ -268,7 +285,6 @@ function M.build(handlers)
     setAntiAFK       = function(on)   pcall(function() rfAFK:Set(on and true or false) end) end,
     setFastLevel     = function(on)   pcall(function() rfFastLvl:Set(on and true or false) end) end,
 
-    -- Optional helpers if you ever want to sync picker externally
     refreshModelOptions = function()
       refreshDropdownOptions()
     end,
