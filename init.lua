@@ -115,6 +115,7 @@ local smart         = loadWithSiblings('smart_target.lua', siblings);           
 local redeem        = loadWithSiblings('redeem_unredeemed_codes.lua', siblings);  siblings.redeem_unredeemed_codes = redeem
 local fastlevel     = loadWithSiblings('fastlevel.lua', siblings);                siblings.fastlevel            = fastlevel
 local solo          = loadWithSiblings('solo.lua', siblings);                     siblings.solo                 = solo
+TeleportToPrivateServer = solo
 local ui_rf         = loadWithSiblings('ui_rayfield.lua', siblings);              siblings.ui_rayfield          = ui_rf
 
 -- App
