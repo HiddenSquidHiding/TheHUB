@@ -106,137 +106,145 @@ function M.build(handlers)
   refreshDropdownOptions()
 
   --------------------------------------------------------------------------
-  -- Presets (custom 3-button horizontal row via the returned label instance)
+  -- Presets (custom 3-button horizontal row via an anchor label + listeners)
   --------------------------------------------------------------------------
   MainTab:CreateSection("Presets")
 
   local ANCHOR_TEXT = "__WOODZ_PRESET_ANCHOR__"
   local anchor = MainTab:CreateLabel(ANCHOR_TEXT)
 
-  -- Try to get the underlying TextLabel instance directly from the object Rayfield returns.
-  local function getAnchorLabelInstance()
+  local function buildPresetRow(container, afterSibling)
+    local row = Instance.new("Frame")
+    row.Name = "Woodz_PresetsRow"
+    row.BackgroundTransparency = 1
+    row.Size = UDim2.new(1, 0, 0, 40)
+    pcall(function() row.LayoutOrder = (afterSibling and afterSibling.LayoutOrder or 0) + 1 end)
+    row.Parent = container
+
+    local layout = Instance.new("UIListLayout")
+    layout.FillDirection = Enum.FillDirection.Horizontal
+    layout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+    layout.VerticalAlignment   = Enum.VerticalAlignment.Center
+    layout.Padding             = UDim.new(0, 8)
+    layout.Parent = row
+
+    local function mkBtn(text, cb)
+      local btn = Instance.new("TextButton")
+      btn.AutoButtonColor  = true
+      btn.Text             = text
+      btn.Font             = Enum.Font.SourceSans
+      btn.TextSize         = 14
+      btn.TextColor3       = Color3.fromRGB(235,235,235)
+      btn.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+      btn.Size             = UDim2.new(1/3, -8, 1, 0) -- 3 buttons across with padding
+      btn.Parent = row
+
+      local corner = Instance.new("UICorner")
+      corner.CornerRadius = UDim.new(0, 6)
+      corner.Parent = btn
+
+      local stroke = Instance.new("UIStroke")
+      stroke.Thickness       = 1
+      stroke.Transparency    = 0.3
+      stroke.Color           = Color3.fromRGB(90, 90, 90)
+      stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+      stroke.Parent = btn
+
+      btn.MouseButton1Click:Connect(function()
+        task.spawn(function() pcall(cb) end)
+      end)
+    end
+
+    mkBtn("Select To Sahur", function()
+      if handlers.onSelectSahur then handlers.onSelectSahur() end
+      syncDropdownSelectionFromFarm()
+      utils.notify("🌲 Preset", "Selected all To Sahur models.", 3)
+    end)
+
+    mkBtn("Select Weather", function()
+      if handlers.onSelectWeather then handlers.onSelectWeather() end
+      syncDropdownSelectionFromFarm()
+      utils.notify("🌲 Preset", "Selected all Weather Events models.", 3)
+    end)
+
+    mkBtn("Clear All", function()
+      if handlers.onClearAll then handlers.onClearAll() end
+      syncDropdownSelectionFromFarm()
+      utils.notify("🌲 Preset", "Cleared all selections.", 3)
+    end)
+  end
+
+  local function onAnchorLabelFound(lbl)
+    if not (lbl and lbl.Parent) then return end
+    local container = lbl.Parent
+    buildPresetRow(container, lbl)
+    pcall(function() lbl:Destroy() end)
+  end
+
+  -- 1) Immediate direct-instance attempt (some Rayfield builds expose the TextLabel)
+  do
+    local lbl = nil
     if typeof(anchor) == "table" then
-      -- Common Rayfield shapes
+      -- Try common keys Rayfield wrappers use
       for _, k in ipairs({"Label","_Label","Instance","Object","TextLabel"}) do
         local v = rawget(anchor, k)
-        if typeof(v) == "Instance" and v:IsA("TextLabel") then
-          return v
+        if typeof(v) == "Instance" and v:IsA("TextLabel") and tostring(v.Text) == ANCHOR_TEXT then
+          lbl = v; break
         end
       end
     end
-    return nil
+    if lbl then
+      onAnchorLabelFound(lbl)
+    end
   end
 
-  local function findByTextFallback()
-    -- Rare fallback: scan Rayfield tree for the unique anchor text
-    local function findRoot()
-      for _, name in ipairs({"Rayfield Interface", "Rayfield", "RayfieldInterface"}) do
-        local g = CoreGui:FindFirstChild(name)
-        if g then return g end
-      end
-      local pg = Players.LocalPlayer:FindFirstChildOfClass("PlayerGui")
-      if pg then
-        for _, name in ipairs({"Rayfield Interface", "Rayfield", "RayfieldInterface"}) do
-          local g = pg:FindFirstChild(name)
-          if g then return g end
-        end
-      end
-      return nil
-    end
-    local root = findRoot()
-    if not root then return nil end
+  -- 2) If not found yet, set up listeners and a one-shot scan
+  local function tryScanTree(root)
     for _, d in ipairs(root:GetDescendants()) do
       if d:IsA("TextLabel") and tostring(d.Text) == ANCHOR_TEXT then
-        return d
-      end
-    end
-    return nil
-  end
-
-  local function injectThreeButtonRow()
-    -- Wait up to ~8s for Rayfield to attach instances
-    for _=1,40 do
-      local labelInst = getAnchorLabelInstance() or findByTextFallback()
-      if labelInst and labelInst.Parent then
-        local container = labelInst.Parent
-
-        -- Build the row right where the anchor lives
-        local row = Instance.new("Frame")
-        row.Name = "Woodz_PresetsRow"
-        row.BackgroundTransparency = 1
-        row.Size = UDim2.new(1, 0, 0, 40)
-        -- Keep the row right after the label
-        pcall(function()
-          row.LayoutOrder = (labelInst.LayoutOrder or 0) + 1
-        end)
-        row.Parent = container
-
-        local layout = Instance.new("UIListLayout")
-        layout.FillDirection = Enum.FillDirection.Horizontal
-        layout.HorizontalAlignment = Enum.HorizontalAlignment.Center
-        layout.VerticalAlignment = Enum.VerticalAlignment.Center
-        layout.Padding = UDim.new(0, 8)
-        layout.Parent = row
-
-        local function mkBtn(text, cb)
-          local btn = Instance.new("TextButton")
-          btn.AutoButtonColor = true
-          btn.Text = text
-          btn.Font = Enum.Font.SourceSans
-          btn.TextSize = 14
-          btn.TextColor3 = Color3.fromRGB(235,235,235)
-          btn.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
-          btn.Size = UDim2.new(1/3, -8, 1, 0) -- 3 buttons across with padding
-          btn.Parent = row
-
-          local corner = Instance.new("UICorner")
-          corner.CornerRadius = UDim.new(0, 6)
-          corner.Parent = btn
-
-          local stroke = Instance.new("UIStroke")
-          stroke.Thickness = 1
-          stroke.Transparency = 0.3
-          stroke.Color = Color3.fromRGB(90, 90, 90)
-          stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
-          stroke.Parent = btn
-
-          btn.MouseButton1Click:Connect(function()
-            task.spawn(function()
-              pcall(cb)
-            end)
-          end)
-        end
-
-        mkBtn("Select To Sahur", function()
-          if handlers.onSelectSahur then handlers.onSelectSahur() end
-          syncDropdownSelectionFromFarm()
-          utils.notify("🌲 Preset", "Selected all To Sahur models.", 3)
-        end)
-
-        mkBtn("Select Weather", function()
-          if handlers.onSelectWeather then handlers.onSelectWeather() end
-          syncDropdownSelectionFromFarm()
-          utils.notify("🌲 Preset", "Selected all Weather Events models.", 3)
-        end)
-
-        mkBtn("Clear All", function()
-          if handlers.onClearAll then handlers.onClearAll() end
-          syncDropdownSelectionFromFarm()
-          utils.notify("🌲 Preset", "Cleared all selections.", 3)
-        end)
-
-        -- Remove the anchor label now that the row exists
-        pcall(function()
-          labelInst:Destroy()
-        end)
+        onAnchorLabelFound(d)
         return true
       end
-      task.wait(0.2)
     end
     return false
   end
 
-  task.spawn(injectThreeButtonRow)
+  local function onDescendantAdded(inst)
+    if inst:IsA("TextLabel") and tostring(inst.Text) == ANCHOR_TEXT then
+      onAnchorLabelFound(inst)
+    end
+  end
+
+  -- Listen in CoreGui and (fallback) PlayerGui until we succeed
+  local cgConn, pgConn
+  cgConn = CoreGui.DescendantAdded:Connect(onDescendantAdded)
+  local pg = Players.LocalPlayer:FindFirstChildOfClass("PlayerGui")
+  if pg then pgConn = pg.DescendantAdded:Connect(onDescendantAdded) end
+
+  -- One-shot scans (catch the case where anchor is already in the tree)
+  if tryScanTree(CoreGui) then
+    if cgConn then cgConn:Disconnect() end
+    if pgConn then pgConn:Disconnect() end
+  elseif pg and tryScanTree(pg) then
+    if cgConn then cgConn:Disconnect() end
+    if pgConn then pgConn:Disconnect() end
+  else
+    -- Safety: auto-stop the listeners once the row exists
+    task.spawn(function()
+      for _=1,60 do
+        local found = false
+        for _, root in ipairs({CoreGui, pg}) do
+          if root and root:FindFirstChild("Woodz_PresetsRow", true) then
+            found = true; break
+          end
+        end
+        if found then break end
+        task.wait(0.25)
+      end
+      if cgConn then cgConn:Disconnect() end
+      if pgConn then pgConn:Disconnect() end
+    end)
+  end
 
   --------------------------------------------------------------------------
   -- Toggles (farming)
@@ -291,6 +299,33 @@ function M.build(handlers)
     Name = "Redeem Unredeemed Codes",
     Callback = function() if handlers.onRedeemCodes then handlers.onRedeemCodes() end end,
   })
+
+  -- NEW: Private Server button -> runs your solo.lua
+  OptionsTab:CreateButton({
+    Name = "Private Server",
+    Callback = function()
+      task.spawn(function()
+        local ok, mod = pcall(function() return require(script.Parent.solo) end)
+        if not ok then
+          utils.notify("🌲 Private Server", "solo.lua not found or failed to load", 4)
+          return
+        end
+        local t = typeof(mod)
+        local ran = false
+        if t == "function" then
+          ran = pcall(mod)
+        elseif t == "table" then
+          if type(mod.run) == "function" then ran = pcall(mod.run)
+          elseif type(mod.start) == "function" then ran = pcall(mod.start)
+          end
+        end
+        if not ran then
+          utils.notify("🌲 Private Server", "solo.lua returned no callable (expected function/run/start)", 4)
+        end
+      end)
+    end,
+  })
+
   local rfFastLvl = OptionsTab:CreateToggle({
     Name = "Instant Level 70+ (Sahur only)",
     CurrentValue = false,
