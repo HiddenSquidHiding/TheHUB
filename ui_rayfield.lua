@@ -45,7 +45,6 @@ function M.build(handlers)
   MainTab:CreateSection("Targets")
 
   local currentSearch = ""
-
   pcall(function() farm.getMonsterModels() end)
 
   local function filteredList()
@@ -108,32 +107,59 @@ function M.build(handlers)
   --------------------------------------------------------------------------
   MainTab:CreateSection("Presets")
 
-  -- Robustly find the "Presets" section container Rayfield created, then inject a row into it.
+  -- Robust helper: find Rayfield ScreenGui root
   local function findRayfieldRoot()
-    return CoreGui:FindFirstChild("Rayfield") or Players.LocalPlayer:FindFirstChildOfClass("PlayerGui") and Players.LocalPlayer.PlayerGui:FindFirstChild("Rayfield")
+    -- Try CoreGui first
+    for _, name in ipairs({"Rayfield Interface", "Rayfield", "RayfieldInterface"}) do
+      local g = CoreGui:FindFirstChild(name)
+      if g then return g end
+    end
+    -- Fallback to PlayerGui
+    local pg = Players.LocalPlayer:FindFirstChildOfClass("PlayerGui")
+    if pg then
+      for _, name in ipairs({"Rayfield Interface", "Rayfield", "RayfieldInterface"}) do
+        local g = pg:FindFirstChild(name)
+        if g then return g end
+      end
+    end
+    return nil
   end
 
+  local function norm(s)
+    s = tostring(s or "")
+    s = s:gsub("%s+", " "):lower()
+    return s
+  end
+
+  -- Find the container that holds the "Presets" section contents
   local function findPresetsContainer()
     local root = findRayfieldRoot()
     if not root then return nil end
+
+    -- Look for a TextLabel whose text contains "presets" (case/spacing insensitive)
     local header
     for _, d in ipairs(root:GetDescendants()) do
       if d:IsA("TextLabel") then
-        local txt = tostring(d.Text or ""):lower()
-        if txt == "presets" then
+        local txt = norm(d.Text)
+        if txt:find("presets", 1, true) then
           header = d
           break
         end
       end
     end
     if not header then return nil end
-    -- Rayfield typically places section header labels directly under the section container
+
+    -- Rayfield's hierarchy usually: SectionContainer -> HeaderLabel
+    -- In most themes, adding our row under header.Parent works; if not, try one level up.
+    local p = header.Parent
+    if p and p:IsA("Frame") then return p end
+    if p and p.Parent and p.Parent:IsA("Frame") then return p.Parent end
     return header.Parent
   end
 
   local function injectThreeButtonRow()
-    -- Try repeatedly for a short time in case Rayfield is still laying out
-    for _=1,30 do
+    -- Wait until Rayfield finishes laying out the section
+    for _=1,80 do -- up to ~16s (80 * 0.2)
       local container = findPresetsContainer()
       if container and not container:FindFirstChild("Woodz_PresetsRow") then
         local row = Instance.new("Frame")
@@ -198,7 +224,7 @@ function M.build(handlers)
 
         return true
       end
-      task.wait(0.1)
+      task.wait(0.2)
     end
     return false
   end
@@ -274,7 +300,7 @@ function M.build(handlers)
     local h2 = hud.findHUD(StarterGui);  if h2 then hud.apply(h2, flags); hud.watch(h2, flags) end
   end
 
-  -- What the app can control after build:
+  -- Exposed controls back to app.lua
   local UI = {
     setCurrentTarget = function(text) pcall(function() currentLabel:Set(text or "Current Target: None") end) end,
     setAutoFarm      = function(on)   pcall(function() rfAutoFarm:Set(on and true or false) end) end,
