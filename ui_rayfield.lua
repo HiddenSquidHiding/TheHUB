@@ -14,10 +14,9 @@ local constants = require(script.Parent.constants)
 local hud       = require(script.Parent.hud)
 local farm      = require(script.Parent.farm)   -- used for model picker
 
-local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
-
-local Players = game:GetService("Players")
-local CoreGui = game:GetService("CoreGui")
+local Rayfield  = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
+local Players   = game:GetService("Players")
+local CoreGui   = game:GetService("CoreGui")
 
 local M = {}
 
@@ -28,11 +27,7 @@ function M.build(handlers)
     Name = "🌲 WoodzHUB — Rayfield",
     LoadingTitle = "WoodzHUB",
     LoadingSubtitle = "Rayfield UI",
-    ConfigurationSaving = {
-      Enabled = false,
-      FolderName = "WoodzHUB",
-      FileName = "Rayfield",
-    },
+    ConfigurationSaving = { Enabled = false, FolderName = "WoodzHUB", FileName = "Rayfield" },
     KeySystem = false,
   })
 
@@ -57,19 +52,28 @@ function M.build(handlers)
   end
 
   local modelDropdown
+  local suppressDropdown = false -- prevents callback recursion/stack overflow
 
   local function syncDropdownSelectionFromFarm()
+    if not modelDropdown then return end
     local sel = farm.getSelected() or {}
+    suppressDropdown = true
     pcall(function() modelDropdown:Set(sel) end)
+    suppressDropdown = false
   end
 
   local function refreshDropdownOptions()
+    if not modelDropdown then return end
     local options = filteredList()
+    suppressDropdown = true
     local ok = pcall(function() modelDropdown:Refresh(options, true) end)
     if not ok then
+      -- Fallback: some Rayfield forks don't expose Refresh; just try Set(options) (harmless if unsupported)
       pcall(function() modelDropdown:Set(options) end)
     end
+    -- Re-apply current selection after options change
     syncDropdownSelectionFromFarm()
+    suppressDropdown = false
   end
 
   MainTab:CreateInput({
@@ -89,6 +93,7 @@ function M.build(handlers)
     MultipleOptions = true,
     Flag = "woodz_models",
     Callback = function(selection)
+      if suppressDropdown then return end  -- <-- stop feedback-loop
       local list = {}
       if typeof(selection) == "table" then
         for _, v in ipairs(selection) do if typeof(v) == "string" then table.insert(list, v) end end
@@ -96,25 +101,27 @@ function M.build(handlers)
         table.insert(list, selection)
       end
       farm.setSelected(list)
-      syncDropdownSelectionFromFarm()
+      -- DO NOT call :Set() here; it retriggers the callback and can overflow
     end,
   })
 
   refreshDropdownOptions()
 
   --------------------------------------------------------------------------
-  -- Presets (custom 3-button horizontal row)
+  -- Presets (custom 3-button horizontal row inserted via unique anchor)
   --------------------------------------------------------------------------
   MainTab:CreateSection("Presets")
 
-  -- Robust helper: find Rayfield ScreenGui root
+  -- Create a unique anchor label we can reliably find later.
+  local ANCHOR_TEXT = "__WOODZ_PRESET_ANCHOR__"
+  local anchorLabel = MainTab:CreateLabel(ANCHOR_TEXT)
+
+  -- Find Rayfield root in either CoreGui or PlayerGui
   local function findRayfieldRoot()
-    -- Try CoreGui first
     for _, name in ipairs({"Rayfield Interface", "Rayfield", "RayfieldInterface"}) do
       local g = CoreGui:FindFirstChild(name)
       if g then return g end
     end
-    -- Fallback to PlayerGui
     local pg = Players.LocalPlayer:FindFirstChildOfClass("PlayerGui")
     if pg then
       for _, name in ipairs({"Rayfield Interface", "Rayfield", "RayfieldInterface"}) do
@@ -125,104 +132,90 @@ function M.build(handlers)
     return nil
   end
 
-  local function norm(s)
-    s = tostring(s or "")
-    s = s:gsub("%s+", " "):lower()
-    return s
-  end
-
-  -- Find the container that holds the "Presets" section contents
-  local function findPresetsContainer()
-    local root = findRayfieldRoot()
-    if not root then return nil end
-
-    -- Look for a TextLabel whose text contains "presets" (case/spacing insensitive)
-    local header
-    for _, d in ipairs(root:GetDescendants()) do
-      if d:IsA("TextLabel") then
-        local txt = norm(d.Text)
-        if txt:find("presets", 1, true) then
-          header = d
-          break
-        end
-      end
-    end
-    if not header then return nil end
-
-    -- Rayfield's hierarchy usually: SectionContainer -> HeaderLabel
-    -- In most themes, adding our row under header.Parent works; if not, try one level up.
-    local p = header.Parent
-    if p and p:IsA("Frame") then return p end
-    if p and p.Parent and p.Parent:IsA("Frame") then return p.Parent end
-    return header.Parent
-  end
-
   local function injectThreeButtonRow()
-    -- Wait until Rayfield finishes laying out the section
-    for _=1,80 do -- up to ~16s (80 * 0.2)
-      local container = findPresetsContainer()
-      if container and not container:FindFirstChild("Woodz_PresetsRow") then
-        local row = Instance.new("Frame")
-        row.Name = "Woodz_PresetsRow"
-        row.BackgroundTransparency = 1
-        row.Size = UDim2.new(1, 0, 0, 40)
-        row.Parent = container
-
-        local layout = Instance.new("UIListLayout")
-        layout.FillDirection = Enum.FillDirection.Horizontal
-        layout.HorizontalAlignment = Enum.HorizontalAlignment.Center
-        layout.VerticalAlignment = Enum.VerticalAlignment.Center
-        layout.Padding = UDim.new(0, 8)
-        layout.Parent = row
-
-        local function mkBtn(text, cb)
-          local btn = Instance.new("TextButton")
-          btn.AutoButtonColor = true
-          btn.Text = text
-          btn.Font = Enum.Font.SourceSans
-          btn.TextSize = 14
-          btn.TextColor3 = Color3.fromRGB(235,235,235)
-          btn.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
-          btn.Size = UDim2.new(1/3, -8, 1, 0) -- 3 buttons across with padding
-          btn.Parent = row
-
-          local corner = Instance.new("UICorner")
-          corner.CornerRadius = UDim.new(0, 6)
-          corner.Parent = btn
-
-          local stroke = Instance.new("UIStroke")
-          stroke.Thickness = 1
-          stroke.Transparency = 0.3
-          stroke.Color = Color3.fromRGB(90, 90, 90)
-          stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
-          stroke.Parent = btn
-
-          btn.MouseButton1Click:Connect(function()
-            task.spawn(function()
-              pcall(cb)
-            end)
-          end)
+    -- Wait up to ~8s for Rayfield to fully lay out the anchor label
+    for _=1,40 do
+      local root = findRayfieldRoot()
+      if root then
+        -- Locate our exact anchor label by text
+        local labelInstance
+        for _, d in ipairs(root:GetDescendants()) do
+          if d:IsA("TextLabel") and tostring(d.Text) == ANCHOR_TEXT then
+            labelInstance = d
+            break
+          end
         end
+        if labelInstance and labelInstance.Parent then
+          local container = labelInstance.Parent
 
-        mkBtn("Select To Sahur", function()
-          if handlers.onSelectSahur then handlers.onSelectSahur() end
-          syncDropdownSelectionFromFarm()
-          utils.notify("🌲 Preset", "Selected all To Sahur models.", 3)
-        end)
+          -- Build the row right where the anchor lives
+          local row = Instance.new("Frame")
+          row.Name = "Woodz_PresetsRow"
+          row.BackgroundTransparency = 1
+          row.Size = UDim2.new(1, 0, 0, 40)
+          row.Parent = container
 
-        mkBtn("Select Weather", function()
-          if handlers.onSelectWeather then handlers.onSelectWeather() end
-          syncDropdownSelectionFromFarm()
-          utils.notify("🌲 Preset", "Selected all Weather Events models.", 3)
-        end)
+          local layout = Instance.new("UIListLayout")
+          layout.FillDirection = Enum.FillDirection.Horizontal
+          layout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+          layout.VerticalAlignment = Enum.VerticalAlignment.Center
+          layout.Padding = UDim.new(0, 8)
+          layout.Parent = row
 
-        mkBtn("Clear All", function()
-          if handlers.onClearAll then handlers.onClearAll() end
-          syncDropdownSelectionFromFarm()
-          utils.notify("🌲 Preset", "Cleared all selections.", 3)
-        end)
+          local function mkBtn(text, cb)
+            local btn = Instance.new("TextButton")
+            btn.AutoButtonColor = true
+            btn.Text = text
+            btn.Font = Enum.Font.SourceSans
+            btn.TextSize = 14
+            btn.TextColor3 = Color3.fromRGB(235,235,235)
+            btn.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+            btn.Size = UDim2.new(1/3, -8, 1, 0) -- 3 buttons across with padding
+            btn.Parent = row
 
-        return true
+            local corner = Instance.new("UICorner")
+            corner.CornerRadius = UDim.new(0, 6)
+            corner.Parent = btn
+
+            local stroke = Instance.new("UIStroke")
+            stroke.Thickness = 1
+            stroke.Transparency = 0.3
+            stroke.Color = Color3.fromRGB(90, 90, 90)
+            stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+            stroke.Parent = btn
+
+            btn.MouseButton1Click:Connect(function()
+              task.spawn(function()
+                pcall(cb)
+              end)
+            end)
+          end
+
+          mkBtn("Select To Sahur", function()
+            if handlers.onSelectSahur then handlers.onSelectSahur() end
+            syncDropdownSelectionFromFarm()
+            utils.notify("🌲 Preset", "Selected all To Sahur models.", 3)
+          end)
+
+          mkBtn("Select Weather", function()
+            if handlers.onSelectWeather then handlers.onSelectWeather() end
+            syncDropdownSelectionFromFarm()
+            utils.notify("🌲 Preset", "Selected all Weather Events models.", 3)
+          end)
+
+          mkBtn("Clear All", function()
+            if handlers.onClearAll then handlers.onClearAll() end
+            syncDropdownSelectionFromFarm()
+            utils.notify("🌲 Preset", "Cleared all selections.", 3)
+          end)
+
+          -- Remove the anchor label now that the row exists
+          pcall(function()
+            -- Rayfield label wrapper shapes vary; destroy the label text instance and any empty holder
+            labelInstance:Destroy()
+          end)
+          return true
+        end
       end
       task.wait(0.2)
     end
@@ -300,7 +293,7 @@ function M.build(handlers)
     local h2 = hud.findHUD(StarterGui);  if h2 then hud.apply(h2, flags); hud.watch(h2, flags) end
   end
 
-  -- Exposed controls back to app.lua
+  -- Controls exposed back to app.lua
   local UI = {
     setCurrentTarget = function(text) pcall(function() currentLabel:Set(text or "Current Target: None") end) end,
     setAutoFarm      = function(on)   pcall(function() rfAutoFarm:Set(on and true or false) end) end,
@@ -311,14 +304,10 @@ function M.build(handlers)
     setAntiAFK       = function(on)   pcall(function() rfAFK:Set(on and true or false) end) end,
     setFastLevel     = function(on)   pcall(function() rfFastLvl:Set(on and true or false) end) end,
 
-    refreshModelOptions = function()
-      refreshDropdownOptions()
-    end,
-    syncModelSelection = function()
-      syncDropdownSelectionFromFarm()
-    end,
+    refreshModelOptions = function() refreshDropdownOptions() end,
+    syncModelSelection  = function() syncDropdownSelectionFromFarm() end,
 
-    destroy          = function()      pcall(function() Rayfield:Destroy() end) end,
+    destroy          = function() pcall(function() Rayfield:Destroy() end) end,
   }
 
   utils.notify("🌲 WoodzHUB", "Rayfield UI loaded.", 3)
