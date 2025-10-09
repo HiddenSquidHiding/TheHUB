@@ -110,8 +110,7 @@ local farm          = loadWithSiblings('farm.lua', siblings);                   
 local smart         = loadWithSiblings('smart_target.lua', siblings);             siblings.smart_target         = smart
 local redeem        = loadWithSiblings('redeem_unredeemed_codes.lua', siblings);  siblings.redeem_unredeemed_codes = redeem
 local fastlevel     = loadWithSiblings('fastlevel.lua', siblings);                siblings.fastlevel            = fastlevel
-
--- ✅ Rayfield UI (replaces ui.lua)
+local solo          = loadWithSiblings('solo.lua', siblings);                     siblings.solo                 = solo
 local ui_rf         = loadWithSiblings('ui_rayfield.lua', siblings);              siblings.ui_rayfield          = ui_rf
 
 -- App
