@@ -258,5 +258,30 @@ local function GenerateReservedServerCode(placeId)
 	return accessCode, gameCode
 end
 
-local accessCode, _ = GenerateReservedServerCode(game.PlaceId)
-game.RobloxReplicatedStorage.ContactListIrisInviteTeleport:FireServer(game.PlaceId, "", accessCode)
+local M = {}
+
+function M.run()
+  local TeleportService = game:GetService("TeleportService")
+  local Players = game:GetService("Players")
+
+  local player  = Players.LocalPlayer
+  local placeId = game.PlaceId
+  if not player or not placeId or placeId == 0 then return false end
+
+  -- Reserve a server using official API
+  local ok, local accessCode, _ = GenerateReservedServerCode(game.PlaceId)
+    return TeleportService:ReserveServer(placeId)
+  end)
+
+  if ok and accessCode then
+    game.RobloxReplicatedStorage.ContactListIrisInviteTeleport:FireServer(game.PlaceId, "", accessCode)
+  else
+    -- Fallback: rejoin public if reserve isn’t available
+    pcall(function() TeleportService:Teleport(placeId, player) end)
+  end
+  return true
+end
+
+M.start = M.run -- optional alias
+return M
+
