@@ -1,5 +1,5 @@
 -- ui_rayfield.lua
--- Rayfield overlay UI for WoodzHUB (multi-select model picker, presets, toggles, status).
+-- Rayfield overlay UI for WoodzHUB (model picker, 3-button row presets, toggles, status).
 -- Calls back into app.lua via the handlers you pass to build().
 
 local function getUtils()
@@ -12,7 +12,7 @@ end
 local utils     = getUtils()
 local constants = require(script.Parent.constants)
 local hud       = require(script.Parent.hud)
-local farm      = require(script.Parent.farm)   -- 👈 used for model picker
+local farm      = require(script.Parent.farm)   -- used for model picker
 
 local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
 
@@ -41,16 +41,12 @@ function M.build(handlers)
   --------------------------------------------------------------------------
   MainTab:CreateSection("Targets")
 
-  -- Keep a local copy of search text for filtering
   local currentSearch = ""
 
-  -- Ensure farm has scanned once (app.start also does this; safe to call again)
   pcall(function() farm.getMonsterModels() end)
 
   local function filteredList()
-    -- farm.filterMonsterModels returns and updates internal filtered list
     local list = farm.filterMonsterModels(currentSearch or "")
-    -- Defensive: ensure it's a flat list of strings
     local out = {}
     for _, v in ipairs(list or {}) do
       if typeof(v) == "string" then table.insert(out, v) end
@@ -58,24 +54,19 @@ function M.build(handlers)
     return out
   end
 
-  -- forward declarations so helpers can reference them
   local modelDropdown
 
   local function syncDropdownSelectionFromFarm()
     local sel = farm.getSelected() or {}
-    -- Rayfield dropdown supports setting a table when MultipleOptions = true
     pcall(function() modelDropdown:Set(sel) end)
   end
 
   local function refreshDropdownOptions()
     local options = filteredList()
-    -- Try Rayfield's Refresh API (options, keep_current_selection?)
     local ok = pcall(function() modelDropdown:Refresh(options, true) end)
     if not ok then
-      -- Fallback: attempt Set on options (some builds accept table for choices)
       pcall(function() modelDropdown:Set(options) end)
     end
-    -- Re-apply current selection after options change
     syncDropdownSelectionFromFarm()
   end
 
@@ -96,7 +87,6 @@ function M.build(handlers)
     MultipleOptions = true,
     Flag = "woodz_models",
     Callback = function(selection)
-      -- selection may be a string (single) or table (multi) depending on Rayfield build
       local list = {}
       if typeof(selection) == "table" then
         for _, v in ipairs(selection) do if typeof(v) == "string" then table.insert(list, v) end end
@@ -104,55 +94,98 @@ function M.build(handlers)
         table.insert(list, selection)
       end
       farm.setSelected(list)
-      -- Keep dropdown selection in sync (guards against library quirks)
       syncDropdownSelectionFromFarm()
     end,
   })
 
-  -- First-time ensure options/selection are aligned
   refreshDropdownOptions()
 
   --------------------------------------------------------------------------
-  -- Presets
+  -- Presets (custom 3-button horizontal row)
   --------------------------------------------------------------------------
   MainTab:CreateSection("Presets")
 
-  MainTab:CreateButton({
-    Name = "Select To Sahur",
-    Callback = function()
-      if handlers.onSelectSahur then handlers.onSelectSahur() end
-      -- reflect external changes in picker
-      syncDropdownSelectionFromFarm()
-      utils.notify("🌲 Preset", "Selected all To Sahur models.", 3)
-    end,
-  })
+  -- We make a tiny placeholder to discover the section's container, then replace it with our row.
+  local placeholder = MainTab:CreateLabel(" ")  -- invisible-ish line
+  local presetsParent = nil
+  pcall(function()
+    -- Try common Rayfield object shapes
+    presetsParent = (placeholder.Label and placeholder.Label.Parent)
+                 or (placeholder.Parent)
+  end)
 
-  MainTab:CreateButton({
-    Name = "Select Weather",
-    Callback = function()
-      if handlers.onSelectWeather then handlers.onSelectWeather() end
-      syncDropdownSelectionFromFarm()
-      utils.notify("🌲 Preset", "Selected all Weather Events models.", 3)
-    end,
-  })
+  -- Create the row inside the discovered container, then remove placeholder
+  do
+    local parent = presetsParent
+    if parent then
+      local row = Instance.new("Frame")
+      row.Name = "Woodz_PresetsRow"
+      row.BackgroundTransparency = 1
+      row.Size = UDim2.new(1, 0, 0, 40)
+      row.Parent = parent
 
-  MainTab:CreateButton({
-    Name = "Select All",
-    Callback = function()
-      if handlers.onSelectAll then handlers.onSelectAll() end
-      refreshDropdownOptions()
-      utils.notify("🌲 Preset", "Selected all models.", 3)
-    end,
-  })
+      local layout = Instance.new("UIListLayout")
+      layout.FillDirection = Enum.FillDirection.Horizontal
+      layout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+      layout.VerticalAlignment = Enum.VerticalAlignment.Center
+      layout.Padding = UDim.new(0, 8)
+      layout.Parent = row
 
-  MainTab:CreateButton({
-    Name = "Clear All",
-    Callback = function()
-      if handlers.onClearAll then handlers.onClearAll() end
-      syncDropdownSelectionFromFarm()
-      utils.notify("🌲 Preset", "Cleared all selections.", 3)
-    end,
-  })
+      local function mkBtn(text, cb)
+        local btn = Instance.new("TextButton")
+        btn.AutoButtonColor = true
+        btn.Text = text
+        btn.Font = Enum.Font.SourceSans
+        btn.TextSize = 14
+        btn.TextColor3 = Color3.fromRGB(235,235,235)
+        btn.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+        btn.Size = UDim2.new(1/3, -8, 1, 0) -- three buttons across, with padding
+        btn.Parent = row
+
+        local corner = Instance.new("UICorner")
+        corner.CornerRadius = UDim.new(0, 6)
+        corner.Parent = btn
+
+        local stroke = Instance.new("UIStroke")
+        stroke.Thickness = 1
+        stroke.Transparency = 0.3
+        stroke.Color = Color3.fromRGB(90, 90, 90)
+        stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+        stroke.Parent = btn
+
+        btn.MouseButton1Click:Connect(function()
+          task.spawn(function()
+            pcall(cb)
+          end)
+        end)
+      end
+
+      mkBtn("Select To Sahur", function()
+        if handlers.onSelectSahur then handlers.onSelectSahur() end
+        syncDropdownSelectionFromFarm()
+        utils.notify("🌲 Preset", "Selected all To Sahur models.", 3)
+      end)
+
+      mkBtn("Select Weather", function()
+        if handlers.onSelectWeather then handlers.onSelectWeather() end
+        syncDropdownSelectionFromFarm()
+        utils.notify("🌲 Preset", "Selected all Weather Events models.", 3)
+      end)
+
+      mkBtn("Clear All", function()
+        if handlers.onClearAll then handlers.onClearAll() end
+        syncDropdownSelectionFromFarm()
+        utils.notify("🌲 Preset", "Cleared all selections.", 3)
+      end)
+
+      -- Remove placeholder line now that our row exists
+      pcall(function()
+        if placeholder.Label then
+          placeholder.Label:Destroy()
+        end
+      end)
+    end
+  end
 
   --------------------------------------------------------------------------
   -- Toggles (farming)
