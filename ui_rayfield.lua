@@ -14,8 +14,9 @@ local constants = require(script.Parent.constants)
 local hud       = require(script.Parent.hud)
 local farm      = require(script.Parent.farm)
 
-local Players   = game:GetService("Players")
-local StarterGui= game:GetService("StarterGui")
+local Players    = game:GetService("Players")
+local StarterGui = game:GetService("StarterGui")
+local CoreGui    = game:GetService("CoreGui")
 
 local Rayfield  = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
 
@@ -52,43 +53,98 @@ function M.build(handlers)
     return out
   end
 
+  local function getSelected()
+    local sel = farm.getSelected() or {}
+    local cleaned = {}
+    for _, v in ipairs(sel) do
+      if typeof(v) == "string" then table.insert(cleaned, v) end
+    end
+    return cleaned
+  end
+
   local modelDropdown
   local suppressDropdown = false -- prevent callback recursion/stack overflow
 
   local function syncDropdownSelectionFromFarm()
     if not modelDropdown then return end
-    local sel = farm.getSelected() or {}
     suppressDropdown = true
-    pcall(function() modelDropdown:Set(sel) end) -- don't re-enter callback
+    pcall(function() modelDropdown:Set(getSelected()) end) -- don't re-enter callback
     suppressDropdown = false
   end
 
   local function refreshDropdownOptions()
     if not modelDropdown then return end
-    local options = filteredList()
+    local options  = filteredList()
+    local selected = getSelected()
     suppressDropdown = true
-    local ok = pcall(function() modelDropdown:Refresh(options, true) end)
+    -- Correct Rayfield signature is usually Refresh(options, selectedList)
+    local ok = pcall(function() modelDropdown:Refresh(options, selected) end)
     if not ok then
-      pcall(function() modelDropdown:Set(options) end) -- fallback for forks without Refresh
+      -- Fallback for forks that only accept one arg
+      pcall(function() modelDropdown:Refresh(options) end)
+      pcall(function() modelDropdown:Set(selected) end)
     end
-    syncDropdownSelectionFromFarm()
     suppressDropdown = false
   end
 
-  MainTab:CreateInput({
+  local SEARCH_PLACEHOLDER = "Type model names to filter…"
+  local searchInputObj = MainTab:CreateInput({
     Name = "Search Models",
-    PlaceholderText = "Type model names to filter…",
+    PlaceholderText = SEARCH_PLACEHOLDER,
     RemoveTextAfterFocusLost = false,
     Callback = function(text)
+      -- Some Rayfield builds only fire this on focus lost; we also attach a live listener below.
       currentSearch = tostring(text or "")
       refreshDropdownOptions()
     end,
   })
 
+  -- Attach LIVE typing updates by grabbing the underlying TextBox
+  task.spawn(function()
+    local function tryGetTextBoxFromReturn(obj)
+      if typeof(obj) == "table" then
+        for _, key in ipairs({ "Input", "TextBox", "Box", "Instance", "Object" }) do
+          local v = rawget(obj, key)
+          if typeof(v) == "Instance" and v:IsA("TextBox") then
+            return v
+          end
+        end
+      end
+      return nil
+    end
+
+    local tb = tryGetTextBoxFromReturn(searchInputObj)
+
+    if not tb then
+      -- Fallback: quick scan for the textbox with our placeholder
+      for _=1,20 do
+        for _, root in ipairs({ CoreGui, Players.LocalPlayer:FindFirstChildOfClass("PlayerGui") }) do
+          if root then
+            for _, d in ipairs(root:GetDescendants()) do
+              if d:IsA("TextBox") and d.PlaceholderText == SEARCH_PLACEHOLDER then
+                tb = d; break
+              end
+            end
+          end
+          if tb then break end
+        end
+        if tb then break end
+        task.wait(0.05)
+      end
+    end
+
+    if tb then
+      tb:GetPropertyChangedSignal("Text"):Connect(function()
+        currentSearch = tostring(tb.Text or "")
+        refreshDropdownOptions()
+      end)
+    end
+  end)
+
   modelDropdown = MainTab:CreateDropdown({
     Name = "Target Models (multi-select)",
     Options = filteredList(),
-    CurrentOption = farm.getSelected() or {},
+    CurrentOption = getSelected(),
     MultipleOptions = true,
     Flag = "woodz_models",
     Callback = function(selection)
@@ -104,11 +160,18 @@ function M.build(handlers)
     end,
   })
 
+  -- Initial sync (ensures options+selection align)
+  refreshDropdownOptions()
+
   -- 👉 Single button directly under the dropdown
   MainTab:CreateButton({
     Name = "Clear All Selections",
     Callback = function()
-      if handlers.onClearAll then handlers.onClearAll() end
+      if handlers.onClearAll then
+        handlers.onClearAll()
+      else
+        farm.setSelected({})
+      end
       syncDropdownSelectionFromFarm()
       utils.notify("🌲 Preset", "Cleared all selections.", 3)
     end,
@@ -176,24 +239,24 @@ function M.build(handlers)
   })
 
   OptionsTab:CreateButton({
-  Name = "Private Server",
-  Callback = function()
-    task.spawn(function()
-      if not _G.TeleportToPrivateServer then
-        utils.notify("🌲 Private Server", "Run solo.lua first to set up the function!", 4)
-        return
-      end
+    Name = "Private Server",
+    Callback = function()
+      task.spawn(function()
+        if not _G.TeleportToPrivateServer then
+          utils.notify("🌲 Private Server", "Run solo.lua first to set up the function!", 4)
+          return
+        end
 
-      local success, err = pcall(_G.TeleportToPrivateServer)
+        local success, err = pcall(_G.TeleportToPrivateServer)
 
-      if success then
-        utils.notify("🌲 Private Server", "Teleport initiated to private server!", 3)
-      else
-        utils.notify("🌲 Private Server", "Failed to teleport: " .. tostring(err), 5)
-      end
-    end)
-  end,
-})
+        if success then
+          utils.notify("🌲 Private Server", "Teleport initiated to private server!", 3)
+        else
+          utils.notify("🌲 Private Server", "Failed to teleport: " .. tostring(err), 5)
+        end
+      end)
+    end,
+  })
 
   local rfFastLvl = OptionsTab:CreateToggle({
     Name = "Instant Level 70+ (Sahur only)",
