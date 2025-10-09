@@ -49,6 +49,16 @@ local antiAfkEnabled         = false
 -- Rayfield handle (set in start)
 local RF = nil
 
+-- Prevent Rayfield -> app -> Rayfield callback feedback
+local suppressRF = false
+local function rfSet(setterFn)
+  if RF and setterFn then
+    suppressRF = true
+    pcall(setterFn)
+    suppressRF = false
+  end
+end
+
 ----------------------------------------------------------------------
 -- Helpers
 ----------------------------------------------------------------------
@@ -66,9 +76,14 @@ local function setSmartFarmUI(on)
 	if RF and RF.setSmartFarm then RF.setSmartFarm(on) end
 end
 
+-- Throttled label setter (Rayfield labels are heavier than TextLabels)
+local lastLabelText, lastLabelAt = nil, 0
 local function setCurrentTarget(text)
-	text = text or "Current Target: None"
-	if RF and RF.setCurrentTarget then pcall(function() RF.setCurrentTarget(text) end) end
+  text = text or "Current Target: None"
+  local now = tick()
+  if text == lastLabelText and (now - lastLabelAt) < 0.15 then return end
+  lastLabelText, lastLabelAt = text, now
+  if RF and RF.setCurrentTarget then pcall(function() RF.setCurrentTarget(text) end) end
 end
 
 -- Resolve ReplicatedStorage MonsterInfo in several common locations
@@ -135,15 +150,16 @@ function app.start()
 
 		-- Auto-Farm (mutually exclusive with Smart Farm)
 		onAutoFarmToggle = function(v)
+			if suppressRF then return end
 			local newState = (v ~= nil) and v or (not autoFarmEnabled)
+
 			if newState and smartFarmEnabled then
 				smartFarmEnabled = false
-				setSmartFarmUI(false)
+				rfSet(function() if RF.setSmartFarm then RF.setSmartFarm(false) end end)
 				notifyToggle("Smart Farm", false)
 			end
 
 			autoFarmEnabled = newState
-			setAutoFarmUI(autoFarmEnabled)
 
 			if autoFarmEnabled then
 				farm.setupAutoAttackRemote()
@@ -165,16 +181,16 @@ function app.start()
 
 		-- Smart Farm (mutually exclusive with Auto-Farm)
 		onSmartFarmToggle = function(v)
+			if suppressRF then return end
 			local newState = (v ~= nil) and v or (not smartFarmEnabled)
 
 			if newState and autoFarmEnabled then
 				autoFarmEnabled = false
-				setAutoFarmUI(false)
+				rfSet(function() if RF.setAutoFarm then RF.setAutoFarm(false) end end)
 				notifyToggle("Auto-Farm", false)
 			end
 
 			smartFarmEnabled = newState
-			setSmartFarmUI(smartFarmEnabled)
 
 			if smartFarmEnabled then
 				local module = resolveMonsterInfo()
@@ -190,7 +206,7 @@ function app.start()
 					end)
 				else
 					smartFarmEnabled = false
-					setSmartFarmUI(false)
+					rfSet(function() if RF.setSmartFarm then RF.setSmartFarm(false) end end)
 				end
 			else
 				setCurrentTarget("Current Target: None")
@@ -200,14 +216,15 @@ function app.start()
 
 		-- Anti-AFK
 		onToggleAntiAFK = function(v)
+			if suppressRF then return end
 			antiAfkEnabled = (v ~= nil) and v or (not antiAfkEnabled)
 			if antiAfkEnabled then antiAFK.enable() else antiAFK.disable() end
 			notifyToggle("Anti-AFK", antiAfkEnabled)
-			if RF and RF.setAntiAFK then RF.setAntiAFK(antiAfkEnabled) end
 		end,
 
 		-- Merchants
 		onToggleMerchant1 = function(v)
+			if suppressRF then return end
 			autoBuyM1Enabled = (v ~= nil) and v or (not autoBuyM1Enabled)
 			if autoBuyM1Enabled then
 				notifyToggle("Merchant — Chicleteiramania", true)
@@ -215,16 +232,16 @@ function app.start()
 					merchants.autoBuyLoop(
 						"SmelterMerchantService",
 						function() return autoBuyM1Enabled end,
-						function(_) end -- Rayfield label is static; we don't rewrite its text
+						function(_) end
 					)
 				end)
 			else
 				notifyToggle("Merchant — Chicleteiramania", false)
 			end
-			if RF and RF.setMerchant1 then RF.setMerchant1(autoBuyM1Enabled) end
 		end,
 
 		onToggleMerchant2 = function(v)
+			if suppressRF then return end
 			autoBuyM2Enabled = (v ~= nil) and v or (not autoBuyM2Enabled)
 			if autoBuyM2Enabled then
 				notifyToggle("Merchant — Bombardino Sewer", true)
@@ -238,11 +255,11 @@ function app.start()
 			else
 				notifyToggle("Merchant — Bombardino Sewer", false)
 			end
-			if RF and RF.setMerchant2 then RF.setMerchant2(autoBuyM2Enabled) end
 		end,
 
 		-- Crates
 		onToggleCrates = function(v)
+			if suppressRF then return end
 			autoOpenCratesEnabled = (v ~= nil) and v or (not autoOpenCratesEnabled)
 			if autoOpenCratesEnabled then
 				crates.refreshCrateInventory(true)
@@ -254,7 +271,6 @@ function app.start()
 			else
 				notifyToggle("Crates", false)
 			end
-			if RF and RF.setCrates then RF.setCrates(autoOpenCratesEnabled) end
 		end,
 
 		-- Codes
@@ -269,15 +285,19 @@ function app.start()
 
 		-- Instant Level 70+
 		onFastLevelToggle = function(v)
+			if suppressRF then return end
 			local newState = (v ~= nil) and v or (not fastlevel.isEnabled())
 			if newState then
 				if smartFarmEnabled then
-					smartFarmEnabled = false; setSmartFarmUI(false); notifyToggle("Smart Farm", false)
+					smartFarmEnabled = false
+					rfSet(function() if RF.setSmartFarm then RF.setSmartFarm(false) end end)
+					notifyToggle("Smart Farm", false)
 				end
 				fastlevel.enable()
 				notifyToggle("Instant Level 70+", true, " — targeting Sahur only")
 				if not autoFarmEnabled then
-					autoFarmEnabled = true; setAutoFarmUI(true)
+					autoFarmEnabled = true
+					rfSet(function() if RF.setAutoFarm then RF.setAutoFarm(true) end end)
 					farm.setupAutoAttackRemote()
 					task.spawn(function()
 						farm.runAutoFarm(function() return autoFarmEnabled end, setCurrentTarget)
@@ -288,7 +308,6 @@ function app.start()
 				fastlevel.disable()
 				notifyToggle("Instant Level 70+", false)
 			end
-			if RF and RF.setFastLevel then RF.setFastLevel(newState) end
 		end,
 	})
 
