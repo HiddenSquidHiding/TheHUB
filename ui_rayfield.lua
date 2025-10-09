@@ -1,6 +1,6 @@
 -- ui_rayfield.lua
--- Rayfield overlay UI for WoodzHUB (toggles, options, presets, status label).
--- It calls back into app.lua via the handlers you pass to build().
+-- Rayfield overlay UI for WoodzHUB (multi-select model picker, presets, toggles, status).
+-- Calls back into app.lua via the handlers you pass to build().
 
 local function getUtils()
   local p = script and script.Parent
@@ -12,6 +12,7 @@ end
 local utils     = getUtils()
 local constants = require(script.Parent.constants)
 local hud       = require(script.Parent.hud)
+local farm      = require(script.Parent.farm)   -- 👈 used for model picker
 
 local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
 
@@ -35,26 +36,127 @@ function M.build(handlers)
   local MainTab    = Window:CreateTab("Main")
   local OptionsTab = Window:CreateTab("Options")
 
-  -- Presets
-  MainTab:CreateSection("Presets")
-  MainTab:CreateButton({
-    Name = "Select To Sahur",
-    Callback = function() if handlers.onSelectSahur then handlers.onSelectSahur() end end,
-  })
-  MainTab:CreateButton({
-    Name = "Select Weather",
-    Callback = function() if handlers.onSelectWeather then handlers.onSelectWeather() end end,
-  })
-  MainTab:CreateButton({
-    Name = "Select All",
-    Callback = function() if handlers.onSelectAll then handlers.onSelectAll() end end,
-  })
-  MainTab:CreateButton({
-    Name = "Clear All",
-    Callback = function() if handlers.onClearAll then handlers.onClearAll() end end,
+  --------------------------------------------------------------------------
+  -- Model Picker (Search + Multi-select Dropdown)
+  --------------------------------------------------------------------------
+  MainTab:CreateSection("Targets")
+
+  -- Keep a local copy of search text for filtering
+  local currentSearch = ""
+
+  -- Ensure farm has scanned once (app.start also does this; safe to call again)
+  pcall(function() farm.getMonsterModels() end)
+
+  local function filteredList()
+    -- farm.filterMonsterModels returns and updates internal filtered list
+    local list = farm.filterMonsterModels(currentSearch or "")
+    -- Defensive: ensure it's a flat list of strings
+    local out = {}
+    for _, v in ipairs(list or {}) do
+      if typeof(v) == "string" then table.insert(out, v) end
+    end
+    return out
+  end
+
+  -- forward declarations so helpers can reference them
+  local modelDropdown
+
+  local function syncDropdownSelectionFromFarm()
+    local sel = farm.getSelected() or {}
+    -- Rayfield dropdown supports setting a table when MultipleOptions = true
+    pcall(function() modelDropdown:Set(sel) end)
+  end
+
+  local function refreshDropdownOptions()
+    local options = filteredList()
+    -- Try Rayfield's Refresh API (options, keep_current_selection?)
+    local ok = pcall(function() modelDropdown:Refresh(options, true) end)
+    if not ok then
+      -- Fallback: attempt Set on options (some builds accept table for choices)
+      pcall(function() modelDropdown:Set(options) end)
+    end
+    -- Re-apply current selection after options change
+    syncDropdownSelectionFromFarm()
+  end
+
+  local searchInput = MainTab:CreateInput({
+    Name = "Search Models",
+    PlaceholderText = "Type model names to filter…",
+    RemoveTextAfterFocusLost = false,
+    Callback = function(text)
+      currentSearch = tostring(text or "")
+      refreshDropdownOptions()
+    end,
   })
 
+  modelDropdown = MainTab:CreateDropdown({
+    Name = "Target Models (multi-select)",
+    Options = filteredList(),
+    CurrentOption = farm.getSelected() or {},
+    MultipleOptions = true,
+    Flag = "woodz_models",
+    Callback = function(selection)
+      -- selection may be a string (single) or table (multi) depending on Rayfield build
+      local list = {}
+      if typeof(selection) == "table" then
+        for _, v in ipairs(selection) do if typeof(v) == "string" then table.insert(list, v) end end
+      elseif typeof(selection) == "string" then
+        table.insert(list, selection)
+      end
+      farm.setSelected(list)
+      -- Keep dropdown selection in sync (guards against library quirks)
+      syncDropdownSelectionFromFarm()
+    end,
+  })
+
+  -- First-time ensure options/selection are aligned
+  refreshDropdownOptions()
+
+  --------------------------------------------------------------------------
+  -- Presets
+  --------------------------------------------------------------------------
+  MainTab:CreateSection("Presets")
+
+  MainTab:CreateButton({
+    Name = "Select To Sahur",
+    Callback = function()
+      if handlers.onSelectSahur then handlers.onSelectSahur() end
+      -- reflect external changes in picker
+      syncDropdownSelectionFromFarm()
+      utils.notify("🌲 Preset", "Selected all To Sahur models.", 3)
+    end,
+  })
+
+  MainTab:CreateButton({
+    Name = "Select Weather",
+    Callback = function()
+      if handlers.onSelectWeather then handlers.onSelectWeather() end
+      syncDropdownSelectionFromFarm()
+      utils.notify("🌲 Preset", "Selected all Weather Events models.", 3)
+    end,
+  })
+
+  MainTab:CreateButton({
+    Name = "Select All",
+    Callback = function()
+      if handlers.onSelectAll then handlers.onSelectAll() end
+      refreshDropdownOptions()
+      utils.notify("🌲 Preset", "Selected all models.", 3)
+    end,
+  })
+
+  MainTab:CreateButton({
+    Name = "Clear All",
+    Callback = function()
+      if handlers.onClearAll then handlers.onClearAll() end
+      syncDropdownSelectionFromFarm()
+      utils.notify("🌲 Preset", "Cleared all selections.", 3)
+    end,
+  })
+
+  --------------------------------------------------------------------------
   -- Toggles (farming)
+  --------------------------------------------------------------------------
   MainTab:CreateSection("Farming")
   local rfAutoFarm = MainTab:CreateToggle({
     Name = "Auto-Farm",
@@ -71,7 +173,9 @@ function M.build(handlers)
 
   local currentLabel = MainTab:CreateLabel("Current Target: None")
 
+  --------------------------------------------------------------------------
   -- Options
+  --------------------------------------------------------------------------
   OptionsTab:CreateSection("Merchants / Crates / AFK")
   local rfMerch1 = OptionsTab:CreateToggle({
     Name = "Auto Buy Mythics (Chicleteiramania)",
@@ -130,6 +234,15 @@ function M.build(handlers)
     setCrates        = function(on)   pcall(function() rfCrates:Set(on and true or false) end) end,
     setAntiAFK       = function(on)   pcall(function() rfAFK:Set(on and true or false) end) end,
     setFastLevel     = function(on)   pcall(function() rfFastLvl:Set(on and true or false) end) end,
+
+    -- Optional helpers if you ever want to sync picker externally
+    refreshModelOptions = function()
+      refreshDropdownOptions()
+    end,
+    syncModelSelection = function()
+      syncDropdownSelectionFromFarm()
+    end,
+
     destroy          = function()      pcall(function() Rayfield:Destroy() end) end,
   }
 
