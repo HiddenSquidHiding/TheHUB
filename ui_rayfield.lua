@@ -54,7 +54,7 @@ function M.build(handlers)
     Callback = function() if handlers.onClearAll then handlers.onClearAll() end end,
   })
 
-  -- Toggles
+  -- Toggles (farming)
   MainTab:CreateSection("Farming")
   local rfAutoFarm = MainTab:CreateToggle({
     Name = "Auto-Farm",
@@ -71,6 +71,7 @@ function M.build(handlers)
 
   local currentLabel = MainTab:CreateLabel("Current Target: None")
 
+  -- Options
   OptionsTab:CreateSection("Merchants / Crates / AFK")
   local rfMerch1 = OptionsTab:CreateToggle({
     Name = "Auto Buy Mythics (Chicleteiramania)",
@@ -109,7 +110,7 @@ function M.build(handlers)
     Callback = function(v) if handlers.onFastLevelToggle then handlers.onFastLevelToggle(v) end end,
   })
 
-  -- Apply HUD hiding just like the old UI did (optional)
+  -- Optional: apply HUD hiding like old UI
   do
     local Players = game:GetService("Players")
     local StarterGui = game:GetService("StarterGui")
@@ -121,7 +122,7 @@ function M.build(handlers)
 
   -- What the app can control after build:
   local UI = {
-    setCurrentTarget = function(text) currentLabel:Set(text or "Current Target: None") end,
+    setCurrentTarget = function(text) pcall(function() currentLabel:Set(text or "Current Target: None") end) end,
     setAutoFarm      = function(on)   pcall(function() rfAutoFarm:Set(on and true or false) end) end,
     setSmartFarm     = function(on)   pcall(function() rfSmartFarm:Set(on and true or false) end) end,
     setMerchant1     = function(on)   pcall(function() rfMerch1:Set(on and true or false) end) end,
