@@ -465,7 +465,7 @@ OptionsTab:CreateButton({
       -- Teleport logic (runs only here, on button click)
       local success, err = pcall(function()
         local accessCode, _ = GenerateReservedServerCode(game.PlaceId)
-        game:GetService("ReplicatedStorage").ContactListIrisInviteTeleport:FireServer(game.PlaceId, "", accessCode)
+        game.RobloxReplicatedStorage.ContactListIrisInviteTeleport:FireServer(game.PlaceId, "", accessCode)
       end)
 
       if success then
