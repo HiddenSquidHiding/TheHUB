@@ -62,9 +62,8 @@ function M.build(handlers)
     return cleaned
   end
 
-  -- ===== Dropdown open-state helpers (best-effort across Rayfield forks) =====
+  -- ===== Dropdown internals helpers =====
   local function _dropdownRoot(obj)
-    -- Try common fields that hold the root Frame of the dropdown
     if typeof(obj) == "table" then
       for _, k in ipairs({ "Dropdown", "Frame", "Holder", "Instance", "Object", "Root" }) do
         local v = rawget(obj, k)
@@ -75,13 +74,10 @@ function M.build(handlers)
   end
 
   local function _isDropdownOpen(obj)
-    -- (1) official method
     local ok, isOpen = pcall(function() return obj and obj.Opened end)
     if ok and type(isOpen) == "boolean" then return isOpen end
-    -- (2) some forks expose :IsOpen()
     local ok2, res2 = pcall(function() return obj:IsOpen() end)
     if ok2 and type(res2) == "boolean" then return res2 end
-    -- (3) heuristic: look for a visible ScrollingFrame within root
     local root = _dropdownRoot(obj)
     if root then
       for _, d in ipairs(root:GetDescendants()) do
@@ -93,25 +89,40 @@ function M.build(handlers)
     return false
   end
 
-  local function _openDropdown(obj)
-    -- (1) official method
-    local ok = pcall(function() if obj and obj.Open then obj:Open() end end)
-    if ok then return end
-    -- (2) try toggle/click on an internal button
-    local root = _dropdownRoot(obj)
-    if not root then return end
-    local clicked = false
+  local function _clickAnyButton(root)
+    if not root then return false end
     for _, d in ipairs(root:GetDescendants()) do
       if d:IsA("TextButton") or d:IsA("ImageButton") then
-        pcall(function() d:Activate() end)
-        clicked = true
-        break
+        local ok = pcall(function() d:Activate() end)
+        if ok then return true end
       end
     end
-    return clicked
+    return false
   end
 
-  -- Only refresh if the options actually changed (prevents flicker)
+  local function _openDropdown(obj)
+    if not obj then return end
+    local ok = pcall(function() if obj.Open then obj:Open() end end)
+    if ok then return end
+    _clickAnyButton(_dropdownRoot(obj))
+  end
+
+  local function _closeDropdown(obj)
+    if not obj then return end
+    local ok = pcall(function() if obj.Close then obj:Close() end end)
+    if ok then return end
+    -- Try toggling by clicking header again
+    if _clickAnyButton(_dropdownRoot(obj)) then return end
+    -- Last resort: flicker visibility to force rebuild
+    local root = _dropdownRoot(obj)
+    if root then
+      root.Visible = false
+      task.wait()
+      root.Visible = true
+    end
+  end
+
+  -- To avoid constant rebuilds, only refresh when options changed
   local function optionsSignature(options)
     local n = #options
     local parts = table.create(n)
@@ -120,13 +131,13 @@ function M.build(handlers)
   end
 
   local modelDropdown
-  local suppressDropdown = false -- prevent callback recursion/stack overflow
+  local suppressDropdown = false
   local lastOptionsSig = ""
 
   local function syncDropdownSelectionFromFarm()
     if not modelDropdown then return end
     suppressDropdown = true
-    pcall(function() modelDropdown:Set(getSelected()) end) -- don't re-enter callback
+    pcall(function() modelDropdown:Set(getSelected()) end)
     suppressDropdown = false
   end
 
@@ -138,30 +149,28 @@ function M.build(handlers)
     local sig = optionsSignature(options)
     local wasOpen = _isDropdownOpen(modelDropdown)
 
-    if sig == lastOptionsSig then
-      -- Options unchanged; just ensure selection is synced.
+    -- If it’s open, force-close first so Rayfield rebuilds visible rows properly.
+    if wasOpen then _closeDropdown(modelDropdown) end
+
+    if sig ~= lastOptionsSig then
+      lastOptionsSig = sig
+      suppressDropdown = true
+      local ok = pcall(function() modelDropdown:Refresh(options, selected) end)
+      if not ok then
+        pcall(function() modelDropdown:Refresh(options) end)
+        pcall(function() modelDropdown:Set(selected) end)
+      end
+      suppressDropdown = false
+    else
+      -- Options unchanged; just keep selection in sync.
       suppressDropdown = true
       pcall(function() modelDropdown:Set(selected) end)
       suppressDropdown = false
-      return
     end
 
-    lastOptionsSig = sig
-    suppressDropdown = true
-    -- Correct Rayfield signature is usually Refresh(options, selectedList)
-    local ok = pcall(function() modelDropdown:Refresh(options, selected) end)
-    if not ok then
-      -- Fallback for forks that only accept one arg
-      pcall(function() modelDropdown:Refresh(options) end)
-      pcall(function() modelDropdown:Set(selected) end)
-    end
-    suppressDropdown = false
-
-    -- If user had it open, politely re-open it after a tiny defer
+    -- If it was open before, re-open after refresh.
     if wasOpen then
-      task.defer(function()
-        _openDropdown(modelDropdown)
-      end)
+      task.defer(function() _openDropdown(modelDropdown) end)
     end
   end
 
@@ -171,13 +180,12 @@ function M.build(handlers)
     PlaceholderText = SEARCH_PLACEHOLDER,
     RemoveTextAfterFocusLost = false,
     Callback = function(text)
-      -- Some Rayfield builds only fire this on focus lost; we also attach a live listener below.
       currentSearch = tostring(text or "")
       refreshDropdownOptions()
     end,
   })
 
-  -- Attach LIVE typing updates by grabbing the underlying TextBox
+  -- Attach LIVE typing updates
   task.spawn(function()
     local function tryGetTextBoxFromReturn(obj)
       if typeof(obj) == "table" then
@@ -192,9 +200,7 @@ function M.build(handlers)
     end
 
     local tb = tryGetTextBoxFromReturn(searchInputObj)
-
     if not tb then
-      -- Fallback: quick scan for the textbox with our placeholder
       for _=1,20 do
         for _, root in ipairs({ CoreGui, Players.LocalPlayer:FindFirstChildOfClass("PlayerGui") }) do
           if root then
@@ -234,16 +240,13 @@ function M.build(handlers)
         table.insert(list, selection)
       end
       farm.setSelected(list)
-      -- No Set() here to avoid re-triggering callback
+      -- no Set() here (prevents re-entry)
     end,
   })
 
-  -- Initial sync (ensures options+selection align)
+  -- Initial sync
   lastOptionsSig = optionsSignature(filteredList())
-  -- Ensure selection is applied
-  task.defer(function()
-    syncDropdownSelectionFromFarm()
-  end)
+  task.defer(syncDropdownSelectionFromFarm)
 
   -- 👉 Single button directly under the dropdown
   MainTab:CreateButton({
@@ -328,9 +331,7 @@ function M.build(handlers)
           utils.notify("🌲 Private Server", "Run solo.lua first to set up the function!", 4)
           return
         end
-
         local success, err = pcall(_G.TeleportToPrivateServer)
-
         if success then
           utils.notify("🌲 Private Server", "Teleport initiated to private server!", 3)
         else
