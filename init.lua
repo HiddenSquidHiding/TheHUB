@@ -73,8 +73,11 @@ local function loadWithSiblings(path, sibs)
   sibs._deps = sibs._deps or {}
   sibs._deps.utils = sibs._deps.utils or utils
   local src = fetch(path)
-  local chunk = loadstring(src, '='..path)
-  assert(chunk)
+
+  -- 👇 capture compile errors instead of a blind assert
+  local chunk, err = loadstring(src, '='..path)
+  assert(chunk, ('[loader] compile failed for %s: %s'):format(path, tostring(err)))
+
   local baseEnv = getfenv()
   local fakeScript = { Parent = sibs }
   local function shimRequire(target)
@@ -92,6 +95,7 @@ local function loadWithSiblings(path, sibs)
   setfenv(chunk, sandbox)
   return chunk()
 end
+
 
 -- Core tables via simple use()
 local constants     = use('constants.lua')
