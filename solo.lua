@@ -203,4 +203,4 @@ TeleportToPrivateServer = function()
 	game.RobloxReplicatedStorage.ContactListIrisInviteTeleport:FireServer(game.PlaceId, "", accessCode)
 end
 
-print("solo.lua loaded: _G.TeleportToPrivateServer is ready (no teleport yet).")
+return TeleportToPrivateServer
