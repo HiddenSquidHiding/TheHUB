@@ -184,7 +184,7 @@ function M.build(handlers)
         return
       end
 
-      local success, err = pcall(TeleportToPrivateServer)
+      local success, err = pcall(_G.TeleportToPrivateServer)
 
       if success then
         utils.notify("🌲 Private Server", "Teleport initiated to private server!", 3)
