@@ -1,5 +1,3 @@
-clean up this code:
-
 local md5 = {}
 local hmac = {}
 local base64 = {}
