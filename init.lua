@@ -97,18 +97,22 @@ end
 local constants     = use('constants.lua')
 local data_monsters = use('data_monsters.lua')
 
+-- ✅ Inject table modules as siblings so `require(script.Parent.xxx)` works
+siblings.constants     = constants
+siblings.data_monsters = data_monsters
+
 -- Sibling-loaded modules (Rayfield ONLY UI)
-local hud           = loadWithSiblings('hud.lua', siblings);                 siblings.hud           = hud
-local anti_afk      = loadWithSiblings('anti_afk.lua', siblings);            siblings.anti_afk      = anti_afk
-local crates        = loadWithSiblings('crates.lua', siblings);              siblings.crates        = crates
-local merchants     = loadWithSiblings('merchants.lua', siblings);           siblings.merchants     = merchants
-local farm          = loadWithSiblings('farm.lua', siblings);                siblings.farm          = farm
-local smart         = loadWithSiblings('smart_target.lua', siblings);        siblings.smart_target  = smart
-local redeem        = loadWithSiblings('redeem_unredeemed_codes.lua', siblings); siblings.redeem_unredeemed_codes = redeem
-local fastlevel     = loadWithSiblings('fastlevel.lua', siblings);           siblings.fastlevel     = fastlevel
+local hud           = loadWithSiblings('hud.lua', siblings);                      siblings.hud                  = hud
+local anti_afk      = loadWithSiblings('anti_afk.lua', siblings);                 siblings.anti_afk             = anti_afk
+local crates        = loadWithSiblings('crates.lua', siblings);                   siblings.crates               = crates
+local merchants     = loadWithSiblings('merchants.lua', siblings);                siblings.merchants            = merchants
+local farm          = loadWithSiblings('farm.lua', siblings);                     siblings.farm                 = farm
+local smart         = loadWithSiblings('smart_target.lua', siblings);             siblings.smart_target         = smart
+local redeem        = loadWithSiblings('redeem_unredeemed_codes.lua', siblings);  siblings.redeem_unredeemed_codes = redeem
+local fastlevel     = loadWithSiblings('fastlevel.lua', siblings);                siblings.fastlevel            = fastlevel
 
 -- ✅ Rayfield UI (replaces ui.lua)
-local ui_rf         = loadWithSiblings('ui_rayfield.lua', siblings);         siblings.ui_rayfield   = ui_rf
+local ui_rf         = loadWithSiblings('ui_rayfield.lua', siblings);              siblings.ui_rayfield          = ui_rf
 
 -- App
 local app = loadWithSiblings('app.lua', siblings)
