@@ -1,5 +1,6 @@
 -- ui_rayfield.lua
--- Rayfield overlay UI for WoodzHUB: live-search model picker (search ABOVE list) + Clear All button, toggles, status.
+-- Rayfield overlay UI for WoodzHUB (profile-aware).
+-- Calls back into app.lua via the handlers you pass to build().
 
 local function getUtils()
   local p = script and script.Parent
@@ -11,11 +12,10 @@ end
 local utils     = getUtils()
 local constants = require(script.Parent.constants)
 local hud       = require(script.Parent.hud)
-local farm      = require(script.Parent.farm)
+local farm      = script.Parent:FindFirstChild("farm") and require(script.Parent.farm) or nil
 
-local Players    = game:GetService("Players")
-local StarterGui = game:GetService("StarterGui")
-local CoreGui    = game:GetService("CoreGui")
+local Players   = game:GetService("Players")
+local StarterGui= game:GetService("StarterGui")
 
 local Rayfield  = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
 
@@ -23,6 +23,7 @@ local M = {}
 
 function M.build(handlers)
   handlers = handlers or {}
+  local flags = handlers.uiFlags or {}
 
   local Window = Rayfield:CreateWindow({
     Name                = "🌲 WoodzHUB — Rayfield",
@@ -36,339 +37,204 @@ function M.build(handlers)
   local OptionsTab = Window:CreateTab("Options")
 
   --------------------------------------------------------------------------
-  -- Targets: Search (top) + Multi-select + Clear All
+  -- Targets: Search + Multi-select + Clear All (only if enabled)
   --------------------------------------------------------------------------
-  MainTab:CreateSection("Targets")
+  local currentLabel = nil
+  if flags.modelPicker and farm then
+    MainTab:CreateSection("Targets")
 
-  -- Always pull the latest models from farm each time (no side-effects).
-  local function getAllModels()
-    local ok, list = pcall(function() return farm.getMonsterModels() end)
-    if ok and type(list) == "table" then return list end
-    return {}
-  end
+    local currentSearch = ""
+    pcall(function() if farm.getMonsterModels then farm.getMonsterModels() end end)
 
-  local function filteredList(search)
-    local src = getAllModels()
-    local q = tostring(search or ""):lower()
-    if q == "" then return src end
-    local out = {}
-    for _, name in ipairs(src) do
-      if typeof(name) == "string" and string.find(name:lower(), q, 1, true) then
-        table.insert(out, name)
+    local function filteredList()
+      local list = (farm.filterMonsterModels and farm.filterMonsterModels(currentSearch or "")) or {}
+      local out = {}
+      for _, v in ipairs(list or {}) do
+        if typeof(v) == "string" then table.insert(out, v) end
       end
+      return out
     end
-    return out
-  end
 
-  local function selectedList()
-    local sel = farm.getSelected() or {}
-    local out = {}
-    for _, v in ipairs(sel) do if typeof(v) == "string" then table.insert(out, v) end end
-    return out
-  end
+    local modelDropdown
+    local suppressDropdown = false
 
-  local function toSet(t)
-    local s = {}
-    for _, v in ipairs(t or {}) do s[v] = true end
-    return s
-  end
-
-  local currentSearch = ""
-  local modelDropdown = nil
-  local suppress = false
-
-  -- Helpers to handle different Rayfield forks
-  local function dd_root(drop)
-    if typeof(drop) ~= "table" then return nil end
-    for _, k in ipairs({ "Dropdown","Frame","Holder","Instance","Object","Root" }) do
-      local v = rawget(drop, k)
-      if typeof(v) == "Instance" and v:IsA("Frame") then return v end
+    local function syncDropdownSelectionFromFarm()
+      if not modelDropdown or not farm.getSelected then return end
+      local sel = farm.getSelected() or {}
+      suppressDropdown = true
+      pcall(function() modelDropdown:Set(sel) end)
+      suppressDropdown = false
     end
-    return nil
-  end
-  local function dd_destroy(drop)
-    if not drop then return end
-    local ok = pcall(function() if drop.Destroy then drop:Destroy() end end)
-    if ok then return end
-    local r = dd_root(drop); if r then pcall(function() r:Destroy() end) end
-  end
-  local function dd_is_open(drop)
-    if not drop then return false end
-    local ok, opened = pcall(function() return drop.Opened end)
-    if ok and type(opened)=="boolean" then return opened end
-    local ok2,res2 = pcall(function() return drop:IsOpen() end)
-    if ok2 and type(res2)=="boolean" then return res2 end
-    local r = dd_root(drop)
-    if r then
-      for _,d in ipairs(r:GetDescendants()) do
-        if d:IsA("ScrollingFrame") and d.Visible and d.AbsoluteSize.Y>0 then return true end
+
+    local function refreshDropdownOptions()
+      if not modelDropdown then return end
+      local options = filteredList()
+      suppressDropdown = true
+      local ok = pcall(function() modelDropdown:Refresh(options, true) end)
+      if not ok then
+        pcall(function() modelDropdown:Set(options) end)
       end
+      syncDropdownSelectionFromFarm()
+      suppressDropdown = false
     end
-    return false
-  end
-  local function dd_open(drop)
-    if not drop then return end
-    pcall(function() if drop.Open then drop:Open() end end)
-    local r = dd_root(drop)
-    if r then
-      for _,d in ipairs(r:GetDescendants()) do
-        if d:IsA("TextButton") or d:IsA("ImageButton") then pcall(function() d:Activate() end); break end
-      end
-    end
-  end
 
-  -- Create search FIRST so it renders above the dropdown
-  local SEARCH_PLACEHOLDER = "Type model names to filter…"
-  local searchInput = MainTab:CreateInput({
-    Name = "Search Models",
-    PlaceholderText = SEARCH_PLACEHOLDER,
-    RemoveTextAfterFocusLost = false,
-    Callback = function(text)
-      currentSearch = tostring(text or "")
-      -- Rebuild below
-      local wasOpen = dd_is_open(modelDropdown)
-      local options  = filteredList(currentSearch)
-      local sel      = selectedList()
-      local keepSet  = toSet(options)
-      local keepSel  = {}
-      for _,v in ipairs(sel) do if keepSet[v] then table.insert(keepSel, v) end end
+    -- Search first (to avoid refresh timing issues)
+    MainTab:CreateInput({
+      Name = "Search Models",
+      PlaceholderText = "Type model names to filter…",
+      RemoveTextAfterFocusLost = false,
+      Callback = function(text)
+        currentSearch = tostring(text or "")
+        refreshDropdownOptions()
+      end,
+    })
 
-      dd_destroy(modelDropdown)
-      suppress = true
-      modelDropdown = MainTab:CreateDropdown({
-        Name = "Target Models (multi-select)",
-        Options = options,
-        CurrentOption = keepSel,
-        MultipleOptions = true,
-        Flag = "woodz_models",
-        Callback = function(selection)
-          if suppress then return end
-          local list = {}
-          if typeof(selection) == "table" then
-            for _, v in ipairs(selection) do if typeof(v)=="string" then table.insert(list, v) end end
-          elseif typeof(selection) == "string" then
-            table.insert(list, selection)
-          end
-          farm.setSelected(list)
-        end,
-      })
-      suppress = false
-      if wasOpen then task.defer(function() dd_open(modelDropdown) end) end
-    end,
-  })
-
-  -- Initial dropdown (appears BELOW the search)
-  modelDropdown = MainTab:CreateDropdown({
-    Name = "Target Models (multi-select)",
-    Options = filteredList(""),
-    CurrentOption = selectedList(),
-    MultipleOptions = true,
-    Flag = "woodz_models",
-    Callback = function(selection)
-      if suppress then return end
-      local list = {}
-      if typeof(selection) == "table" then
-        for _, v in ipairs(selection) do if typeof(v)=="string" then table.insert(list, v) end end
-      elseif typeof(selection) == "string" then
-        table.insert(list, selection)
-      end
-      farm.setSelected(list)
-    end,
-  })
-
-  -- Try to wire live typing (optional – the callback above already rebuilds)
-  task.spawn(function()
-    local function tbFrom(obj)
-      if typeof(obj)=="table" then
-        for _,k in ipairs({ "Input","TextBox","Box","Instance","Object" }) do
-          local v = rawget(obj,k)
-          if typeof(v)=="Instance" and v:IsA("TextBox") then return v end
+    modelDropdown = MainTab:CreateDropdown({
+      Name = "Target Models (multi-select)",
+      Options = filteredList(),
+      CurrentOption = (farm.getSelected and farm.getSelected()) or {},
+      MultipleOptions = true,
+      Flag = "woodz_models",
+      Callback = function(selection)
+        if suppressDropdown or not farm.setSelected then return end
+        local list = {}
+        if typeof(selection) == "table" then
+          for _, v in ipairs(selection) do if typeof(v) == "string" then table.insert(list, v) end end
+        elseif typeof(selection) == "string" then
+          table.insert(list, selection)
         end
-      end
-      return nil
-    end
-    local tb = tbFrom(searchInput)
-    if not tb then
-      for _=1,20 do
-        for _,root in ipairs({ CoreGui, Players.LocalPlayer:FindFirstChildOfClass("PlayerGui") }) do
-          if root then
-            for _,d in ipairs(root:GetDescendants()) do
-              if d:IsA("TextBox") and d.PlaceholderText == SEARCH_PLACEHOLDER then tb=d; break end
-            end
-          end
-          if tb then break end
-        end
-        if tb then break end
-        task.wait(0.05)
-      end
-    end
-    if tb then
-      tb:GetPropertyChangedSignal("Text"):Connect(function()
-        -- Delegate to the CreateInput callback to rebuild
-        searchInput.Callback(tb.Text)
-      end)
-    end
-  end)
+        farm.setSelected(list)
+      end,
+    })
 
-  -- Clear button directly under the dropdown
-  MainTab:CreateButton({
-    Name = "Clear All Selections",
-    Callback = function()
-      if handlers.onClearAll then handlers.onClearAll() else farm.setSelected({}) end
-      suppress = true
-      pcall(function() if modelDropdown and modelDropdown.Set then modelDropdown:Set({}) end end)
-      suppress = false
-      utils.notify("🌲 Preset", "Cleared all selections.", 3)
-    end,
-  })
+    MainTab:CreateButton({
+      Name = "Clear All Selections",
+      Callback = function()
+        if handlers.onClearAll then handlers.onClearAll() end
+        syncDropdownSelectionFromFarm()
+        utils.notify("🌲 Preset", "Cleared all selections.", 3)
+      end,
+    })
+  end
 
   --------------------------------------------------------------------------
-  -- Farming toggles + current target
+  -- Farming toggles + current target (conditionally shown)
   --------------------------------------------------------------------------
-  MainTab:CreateSection("Farming")
+  if flags.autoFarm or flags.smartFarm or flags.currentTarget then
+    MainTab:CreateSection("Farming")
+  end
 
-  local rfAutoFarm = MainTab:CreateToggle({
-    Name = "Auto-Farm",
-    CurrentValue = false,
-    Flag = "woodz_auto_farm",
-    Callback = function(v) if handlers.onAutoFarmToggle then handlers.onAutoFarmToggle(v) end end,
-  })
+  local rfAutoFarm, rfSmartFarm
+  if flags.autoFarm then
+    rfAutoFarm = MainTab:CreateToggle({
+      Name = "Auto-Farm",
+      CurrentValue = false,
+      Flag = "woodz_auto_farm",
+      Callback = function(v) if handlers.onAutoFarmToggle then handlers.onAutoFarmToggle(v) end end,
+    })
+  end
 
-  local rfSmartFarm = MainTab:CreateToggle({
-    Name = "Smart Farm",
-    CurrentValue = false,
-    Flag = "woodz_smart_farm",
-    Callback = function(v) if handlers.onSmartFarmToggle then handlers.onSmartFarmToggle(v) end end,
-  })
+  if flags.smartFarm then
+    rfSmartFarm = MainTab:CreateToggle({
+      Name = "Smart Farm",
+      CurrentValue = false,
+      Flag = "woodz_smart_farm",
+      Callback = function(v) if handlers.onSmartFarmToggle then handlers.onSmartFarmToggle(v) end end,
+    })
+  end
 
-  local currentLabel = MainTab:CreateLabel("Current Target: None")
-
-  --------------------------------------------------------------------------
-  -- Options: merchants / crates / AFK + extras
-  --------------------------------------------------------------------------
-  OptionsTab:CreateSection("Merchants / Crates / AFK")
-
-  local rfMerch1 = OptionsTab:CreateToggle({
-    Name = "Auto Buy Mythics (Chicleteiramania)",
-    CurrentValue = false,
-    Flag = "woodz_m1",
-    Callback = function(v) if handlers.onToggleMerchant1 then handlers.onToggleMerchant1(v) end end,
-  })
-
-  local rfMerch2 = OptionsTab:CreateToggle({
-    Name = "Auto Buy Mythics (Bombardino Sewer)",
-    CurrentValue = false,
-    Flag = "woodz_m2",
-    Callback = function(v) if handlers.onToggleMerchant2 then handlers.onToggleMerchant2(v) end end,
-  })
-
-  local rfCrates = OptionsTab:CreateToggle({
-    Name = "Auto Open Crates",
-    CurrentValue = false,
-    Flag = "woodz_crates",
-    Callback = function(v) if handlers.onToggleCrates then handlers.onToggleCrates(v) end end,
-  })
-
-  local rfAFK = OptionsTab:CreateToggle({
-    Name = "Anti-AFK",
-    CurrentValue = false,
-    Flag = "woodz_afk",
-    Callback = function(v) if handlers.onToggleAntiAFK then handlers.onToggleAntiAFK(v) end end,
-  })
-
-  OptionsTab:CreateSection("Extras")
-
-  OptionsTab:CreateButton({
-    Name = "Redeem Unredeemed Codes",
-    Callback = function() if handlers.onRedeemCodes then handlers.onRedeemCodes() end end,
-  })
-
-  OptionsTab:CreateButton({
-    Name = "Private Server",
-    Callback = function()
-      task.spawn(function()
-        if not _G.TeleportToPrivateServer then
-          utils.notify("🌲 Private Server", "Run solo.lua first to set up the function!", 4)
-          return
-        end
-        local success, err = pcall(_G.TeleportToPrivateServer)
-        if success then
-          utils.notify("🌲 Private Server", "Teleport initiated to private server!", 3)
-        else
-          utils.notify("🌲 Private Server", "Failed to teleport: " .. tostring(err), 5)
-        end
-      end)
-    end,
-  })
-
-  local rfFastLvl = OptionsTab:CreateToggle({
-    Name = "Instant Level 70+ (Sahur only)",
-    CurrentValue = false,
-    Flag = "woodz_fastlevel",
-    Callback = function(v) if handlers.onFastLevelToggle then handlers.onFastLevelToggle(v) end end,
-  })
+  if flags.currentTarget then
+    currentLabel = MainTab:CreateLabel("Current Target: None")
+  end
 
   --------------------------------------------------------------------------
-  -- Optional: HUD auto-hide
+  -- Options: merchants / crates / AFK + extras (conditionally)
+  --------------------------------------------------------------------------
+  OptionsTab:CreateSection("Options")
+
+  local rfMerch1, rfMerch2, rfCrates, rfAFK, rfFastLvl
+
+  if flags.merchants then
+    rfMerch1 = OptionsTab:CreateToggle({
+      Name = "Auto Buy Mythics (Chicleteiramania)",
+      CurrentValue = false,
+      Flag = "woodz_m1",
+      Callback = function(v) if handlers.onToggleMerchant1 then handlers.onToggleMerchant1(v) end end,
+    })
+    rfMerch2 = OptionsTab:CreateToggle({
+      Name = "Auto Buy Mythics (Bombardino Sewer)",
+      CurrentValue = false,
+      Flag = "woodz_m2",
+      Callback = function(v) if handlers.onToggleMerchant2 then handlers.onToggleMerchant2(v) end end,
+    })
+  end
+
+  if flags.crates then
+    rfCrates = OptionsTab:CreateToggle({
+      Name = "Auto Open Crates",
+      CurrentValue = false,
+      Flag = "woodz_crates",
+      Callback = function(v) if handlers.onToggleCrates then handlers.onToggleCrates(v) end end,
+    })
+  end
+
+  if flags.antiAFK then
+    rfAFK = OptionsTab:CreateToggle({
+      Name = "Anti-AFK",
+      CurrentValue = false,
+      Flag = "woodz_afk",
+      Callback = function(v) if handlers.onToggleAntiAFK then handlers.onToggleAntiAFK(v) end end,
+    })
+  end
+
+  if flags.redeemCodes then
+    OptionsTab:CreateButton({
+      Name = "Redeem Unredeemed Codes",
+      Callback = function() if handlers.onRedeemCodes then handlers.onRedeemCodes() end end,
+    })
+  end
+
+  if flags.privateServer then
+    OptionsTab:CreateButton({
+      Name = "Private Server",
+      Callback = function() if handlers.onPrivateServer then handlers.onPrivateServer() end end,
+    })
+  end
+
+  if flags.fastlevel then
+    rfFastLvl = OptionsTab:CreateToggle({
+      Name = "Instant Level 70+ (Sahur only)",
+      CurrentValue = false,
+      Flag = "woodz_fastlevel",
+      Callback = function(v) if handlers.onFastLevelToggle then handlers.onFastLevelToggle(v) end end,
+    })
+  end
+
+  --------------------------------------------------------------------------
+  -- Optional: HUD auto-hide (same behavior you had before)
   --------------------------------------------------------------------------
   do
-    local flags = { premiumHidden=true, vipHidden=true, limitedPetHidden=true }
+    local flagsHUD = { premiumHidden=true, vipHidden=true, limitedPetHidden=true }
     local pg = Players.LocalPlayer:FindFirstChildOfClass("PlayerGui")
-    local h1 = hud.findHUD(pg);         if h1 then hud.apply(h1, flags); hud.watch(h1, flags) end
-    local h2 = hud.findHUD(StarterGui); if h2 then hud.apply(h2, flags); hud.watch(h2, flags) end
+    local h1 = hud and hud.findHUD and hud.findHUD(pg);         if h1 and hud.apply then hud.apply(h1, flagsHUD); if hud.watch then hud.watch(h1, flagsHUD) end end
+    local h2 = hud and hud.findHUD and hud.findHUD(StarterGui); if h2 and hud.apply then hud.apply(h2, flagsHUD); if hud.watch then hud.watch(h2, flagsHUD) end end
   end
 
   --------------------------------------------------------------------------
   -- Expose minimal UI control to app.lua
   --------------------------------------------------------------------------
   local UI = {
-    setCurrentTarget = function(text) pcall(function() currentLabel:Set(text or "Current Target: None") end) end,
-    setAutoFarm      = function(on)   pcall(function() rfAutoFarm:Set(on and true or false) end) end,
-    setSmartFarm     = function(on)   pcall(function() rfSmartFarm:Set(on and true or false) end) end,
-    setMerchant1     = function(on)   pcall(function() rfMerch1:Set(on and true or false) end) end,
-    setMerchant2     = function(on)   pcall(function() rfMerch2:Set(on and true or false) end) end,
-    setCrates        = function(on)   pcall(function() rfCrates:Set(on and true or false) end) end,
-    setAntiAFK       = function(on)   pcall(function() rfAFK:Set(on and true or false) end) end,
-    setFastLevel     = function(on)   pcall(function() rfFastLvl:Set(on and true or false) end) end,
-
-    refreshModelOptions = function()
-      -- Force dropdown rebuild with latest workspace scan
-      local wasOpen = dd_is_open(modelDropdown)
-      local options  = filteredList(currentSearch)
-      local sel      = selectedList()
-      local keepSet  = toSet(options)
-      local keepSel  = {}
-      for _,v in ipairs(sel) do if keepSet[v] then table.insert(keepSel, v) end end
-      dd_destroy(modelDropdown)
-      suppress = true
-      modelDropdown = MainTab:CreateDropdown({
-        Name = "Target Models (multi-select)",
-        Options = options,
-        CurrentOption = keepSel,
-        MultipleOptions = true,
-        Flag = "woodz_models",
-        Callback = function(selection)
-          if suppress then return end
-          local list = {}
-          if typeof(selection) == "table" then
-            for _, v in ipairs(selection) do if typeof(v)=="string" then table.insert(list, v) end end
-          elseif typeof(selection) == "string" then
-            table.insert(list, selection)
-          end
-          farm.setSelected(list)
-        end,
-      })
-      suppress = false
-      if wasOpen then task.defer(function() dd_open(modelDropdown) end) end
+    setCurrentTarget = function(text)
+      if currentLabel then pcall(function() currentLabel:Set(text or "Current Target: None") end) end
     end,
-
-    syncModelSelection  = function()
-      suppress = true
-      pcall(function() if modelDropdown and modelDropdown.Set then modelDropdown:Set(selectedList()) end end)
-      suppress = false
-    end,
-
-    destroy          = function() pcall(function() Rayfield:Destroy() end) end,
+    setAutoFarm  = function(on) if rfAutoFarm then pcall(function() rfAutoFarm:Set(on and true or false) end) end end,
+    setSmartFarm = function(on) if rfSmartFarm then pcall(function() rfSmartFarm:Set(on and true or false) end) end end,
+    setMerchant1 = function(on) if rfMerch1   then pcall(function() rfMerch1:Set(on and true or false) end) end end,
+    setMerchant2 = function(on) if rfMerch2   then pcall(function() rfMerch2:Set(on and true or false) end) end end,
+    setCrates    = function(on) if rfCrates   then pcall(function() rfCrates:Set(on and true or false) end) end end,
+    setAntiAFK   = function(on) if rfAFK      then pcall(function() rfAFK:Set(on and true or false) end) end end,
+    setFastLevel = function(on) if rfFastLvl  then pcall(function() rfFastLvl:Set(on and true or false) end) end end,
+    destroy      = function() pcall(function() Rayfield:Destroy() end) end,
   }
 
   utils.notify("🌲 WoodzHUB", "Rayfield UI loaded.", 3)
