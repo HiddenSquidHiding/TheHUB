@@ -2,6 +2,8 @@
 -- Auto-farm with smooth constraint-based follow (no glide, no judder).
 -- Uses local data from data_monsters.lua (Weather / To Sahur / Forced).
 -- Weather Events: 30s timeout. Non-weather: skip if HP doesn't drop for 3s.
+-- 🔸 Weather preemption: if "Weather Events" is selected, immediately switch
+-- to a weather mob the moment one appears, even if you're mid-fight.
 
 -- 🔧 Utils + data
 local function getUtils()
@@ -59,6 +61,24 @@ local function isSahurName(name)
   local lname = string.lower(name or "")
   for _, s in ipairs(SAHUR_NAMES) do
     if lname == string.lower(s) then return true end
+  end
+  return false
+end
+
+-- 🔸 Weather preemption helpers
+local function isWeatherSelected()
+  return table.find(selectedMonsterModels, "Weather Events") ~= nil
+end
+
+local function anyAliveWeather()
+  if not isWeatherSelected() then return false end
+  for _, node in ipairs(Workspace:GetDescendants()) do
+    if node:IsA("Model") and not Players:GetPlayerFromCharacter(node) then
+      local h = node:FindFirstChildOfClass("Humanoid")
+      if h and h.Health > 0 and isWeatherName(node.Name) then
+        return true
+      end
+    end
   end
   return false
 end
@@ -385,7 +405,8 @@ function M.runAutoFarm(flagGetter, setTargetText)
         lastHealth = h
       end)
 
-      -- attack loop
+      -- attack loop with weather preemption
+      local lastWeatherPoll = 0
       while flagGetter() and enemy.Parent and eh.Health > 0 do
         local partNow = findBasePart(enemy) or targetPart
         if not partNow then break end
@@ -411,6 +432,17 @@ function M.runAutoFarm(flagGetter, setTargetText)
         if not isWeather and (now - lastDropAt) > NON_WEATHER_STALL_TIMEOUT then
           utils.notify("🌲 Auto-Farm", ("Skipping %s (no HP change for %0.1fs)"):format(enemy.Name, NON_WEATHER_STALL_TIMEOUT), 3)
           break
+        end
+
+        -- 🔸 Weather preemption:
+        -- if Weather is selected and any weather mob is alive,
+        -- and we're NOT already on a weather mob, immediately switch.
+        if not isWeather and (now - lastWeatherPoll) >= 0.1 then
+          lastWeatherPoll = now
+          if anyAliveWeather() then
+            utils.notify("🌲 Auto-Farm", "Weather target detected — switching immediately.", 2)
+            break
+          end
         end
 
         RunService.Heartbeat:Wait()
