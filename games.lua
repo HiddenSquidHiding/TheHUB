@@ -8,16 +8,16 @@ return {
     name = "Generic",
     modules = { "anti_afk" }, -- keep it light by default
     ui = {
-      modelPicker = false, currentTarget = false,
-      autoFarm = false, smartFarm = false,
-      merchants = false, crates = false, antiAFK = true,
-      redeemCodes = false, fastlevel = false, privateServer = false,
+      modelPicker   = false, currentTarget = false,
+      autoFarm      = false, smartFarm     = false,
+      merchants     = false, crates        = false, antiAFK = true,
+      redeemCodes   = false, fastlevel     = false, privateServer = false,
     },
   },
 
   --------------------------------------------------------------------
-  -- Example profile — replace the key with your universeId (GameId)
-  -- tostring(game.GameId)
+  -- Brainrot Evolution (main experience) — replace this key if your
+  -- universeId differs. Use tostring(game.GameId) for universe keys.
   --------------------------------------------------------------------
   ["place:111989938562194"] = {
     name = "Brainrot Evolution",
@@ -26,36 +26,27 @@ return {
       "redeem_unredeemed_codes","fastlevel"
     },
     ui = {
-      modelPicker = true,   currentTarget = true,
-      autoFarm = true,      smartFarm = true,
-      merchants = true,     crates = true,  antiAFK = true,
-      redeemCodes = true,   fastlevel = true, privateServer = true,
-    },
-  },
-
-    ["place:90608986169653"] = {
-    name = "Brainrot Evolution Dungeon",
-    modules = {
-      "anti_afk","redeem_unredeemed_codes""
-    },
-    ui = {
-      currentTarget = true,    antiAFK = true,
-      redeemCodes = true,   privateServer = true,
+      modelPicker   = true,  currentTarget = true,
+      autoFarm      = true,  smartFarm     = true,
+      merchants     = true,  crates        = true,  antiAFK = true,
+      redeemCodes   = true,  fastlevel     = true,  privateServer = true,
     },
   },
 
   --------------------------------------------------------------------
-  -- You can also target a specific place:
-  -- key format: "place:<placeId>"
+  -- Brainrot Evolutions • Dungeons (PlaceId-specific route)
+  -- This profile boots a dedicated module that draws its own Rayfield UI,
+  -- so we don’t enable the generic hub controls here.
   --------------------------------------------------------------------
-  -- ["place:1234567890"] = {
-  --   name = "My Special Place",
-  --   modules = { "anti_afk", "farm" },
-  --   ui = {
-  --     modelPicker = true, currentTarget = true,
-  --     autoFarm = true, smartFarm = false,
-  --     merchants = false, crates = false, antiAFK = true,
-  --     redeemCodes = false, fastlevel = false, privateServer = true,
-  --   },
-  -- },
+  ["place:90608986169653"] = {
+    name    = "Brainrot Dungeons",
+    modules = { },              -- let the dungeon module own its logic/UI
+    run     = "brainrot_dungeon_rayfield", -- << require(this ModuleScript) if present
+    ui      = {
+      modelPicker   = false, currentTarget = false,
+      autoFarm      = false, smartFarm     = false,
+      merchants     = false, crates        = false, antiAFK = false,
+      redeemCodes   = false, fastlevel     = false, privateServer = false,
+    },
+  },
 }
