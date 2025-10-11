@@ -1,6 +1,5 @@
 -- ui_rayfield.lua
--- Rayfield overlay UI for WoodzHUB (model picker, single "Clear All" button under picker, toggles, status).
--- Calls back into app.lua via the handlers you pass to build().
+-- Rayfield overlay UI for WoodzHUB (model picker with live search; recreate dropdown on-the-fly), single "Clear All" button, toggles, status.
 
 local function getUtils()
   local p = script and script.Parent
@@ -37,7 +36,7 @@ function M.build(handlers)
   local OptionsTab = Window:CreateTab("Options")
 
   --------------------------------------------------------------------------
-  -- Targets: Search + Multi-select + Clear All (right under dropdown)
+  -- Targets: Search + Multi-select + Clear All
   --------------------------------------------------------------------------
   MainTab:CreateSection("Targets")
 
@@ -53,154 +52,146 @@ function M.build(handlers)
     return out
   end
 
-  local function getSelected()
+  local function selectedList()
     local sel = farm.getSelected() or {}
-    local cleaned = {}
+    local out = {}
     for _, v in ipairs(sel) do
-      if typeof(v) == "string" then table.insert(cleaned, v) end
+      if typeof(v) == "string" then table.insert(out, v) end
     end
-    return cleaned
+    return out
   end
 
-  -- ===== Dropdown internals helpers =====
-  local function _dropdownRoot(obj)
-    if typeof(obj) == "table" then
-      for _, k in ipairs({ "Dropdown", "Frame", "Holder", "Instance", "Object", "Root" }) do
-        local v = rawget(obj, k)
-        if typeof(v) == "Instance" and v:IsA("Frame") then return v end
+  -- --- Dropdown management: recreate instead of refresh --------------------
+  local modelDropdown = nil
+  local suppress = false
+
+  local function isOpen(drop)
+    if not drop then return false end
+    local ok, opened = pcall(function() return drop.Opened end)
+    if ok and type(opened) == "boolean" then return opened end
+    local ok2, res2 = pcall(function() return drop:IsOpen() end)
+    if ok2 and type(res2) == "boolean" then return res2 end
+    -- heuristic: visible scrollingframe in its tree
+    local root = typeof(drop) == "table" and (rawget(drop,"Dropdown") or rawget(drop,"Frame") or rawget(drop,"Instance"))
+    if typeof(root) == "Instance" then
+      for _,d in ipairs(root:GetDescendants()) do
+        if d:IsA("ScrollingFrame") and d.Visible and d.AbsoluteSize.Y > 0 then return true end
       end
     end
-    return nil
+    return false
   end
 
-  local function _isDropdownOpen(obj)
-    local ok, isOpen = pcall(function() return obj and obj.Opened end)
-    if ok and type(isOpen) == "boolean" then return isOpen end
-    local ok2, res2 = pcall(function() return obj:IsOpen() end)
-    if ok2 and type(res2) == "boolean" then return res2 end
-    local root = _dropdownRoot(obj)
-    if root then
+  local function setVisibleFalse(drop)
+    local root = typeof(drop) == "table" and (rawget(drop,"Dropdown") or rawget(drop,"Frame") or rawget(drop,"Instance"))
+    if typeof(root) == "Instance" then
+      root.Visible = false
+    end
+  end
+
+  local function safeOpen(drop)
+    if not drop then return end
+    pcall(function() if drop.Open then drop:Open() end end)
+    -- a few forks need a header click; try to click any internal button
+    local root = typeof(drop) == "table" and (rawget(drop,"Dropdown") or rawget(drop,"Frame") or rawget(drop,"Instance"))
+    if typeof(root) == "Instance" then
       for _, d in ipairs(root:GetDescendants()) do
-        if d:IsA("ScrollingFrame") and d.Visible and d.AbsoluteSize.Y > 0 then
-          return true
+        if d:IsA("TextButton") or d:IsA("ImageButton") then
+          pcall(function() d:Activate() end)
+          break
         end
       end
     end
-    return false
   end
 
-  local function _clickAnyButton(root)
-    if not root then return false end
-    for _, d in ipairs(root:GetDescendants()) do
-      if d:IsA("TextButton") or d:IsA("ImageButton") then
-        local ok = pcall(function() d:Activate() end)
-        if ok then return true end
-      end
-    end
-    return false
-  end
-
-  local function _openDropdown(obj)
-    if not obj then return end
-    local ok = pcall(function() if obj.Open then obj:Open() end end)
-    if ok then return end
-    _clickAnyButton(_dropdownRoot(obj))
-  end
-
-  local function _closeDropdown(obj)
-    if not obj then return end
-    local ok = pcall(function() if obj.Close then obj:Close() end end)
-    if ok then return end
-    -- Try toggling by clicking header again
-    if _clickAnyButton(_dropdownRoot(obj)) then return end
-    -- Last resort: flicker visibility to force rebuild
-    local root = _dropdownRoot(obj)
-    if root then
-      root.Visible = false
-      task.wait()
-      root.Visible = true
-    end
-  end
-
-  -- To avoid constant rebuilds, only refresh when options changed
-  local function optionsSignature(options)
-    local n = #options
-    local parts = table.create(n)
-    for i=1,n do parts[i] = options[i] end
-    return table.concat(parts, "\0")
-  end
-
-  local modelDropdown
-  local suppressDropdown = false
-  local lastOptionsSig = ""
-
-  local function syncDropdownSelectionFromFarm()
-    if not modelDropdown then return end
-    suppressDropdown = true
-    pcall(function() modelDropdown:Set(getSelected()) end)
-    suppressDropdown = false
-  end
-
-  local function refreshDropdownOptions()
-    if not modelDropdown then return end
-    local options  = filteredList()
-    local selected = getSelected()
-
-    local sig = optionsSignature(options)
-    local wasOpen = _isDropdownOpen(modelDropdown)
-
-    -- If it’s open, force-close first so Rayfield rebuilds visible rows properly.
-    if wasOpen then _closeDropdown(modelDropdown) end
-
-    if sig ~= lastOptionsSig then
-      lastOptionsSig = sig
-      suppressDropdown = true
-      local ok = pcall(function() modelDropdown:Refresh(options, selected) end)
-      if not ok then
-        pcall(function() modelDropdown:Refresh(options) end)
-        pcall(function() modelDropdown:Set(selected) end)
-      end
-      suppressDropdown = false
-    else
-      -- Options unchanged; just keep selection in sync.
-      suppressDropdown = true
-      pcall(function() modelDropdown:Set(selected) end)
-      suppressDropdown = false
-    end
-
-    -- If it was open before, re-open after refresh.
-    if wasOpen then
-      task.defer(function() _openDropdown(modelDropdown) end)
-    end
-  end
-
+  -- anchor elements to keep layout stable
   local SEARCH_PLACEHOLDER = "Type model names to filter…"
-  local searchInputObj = MainTab:CreateInput({
+  local searchInput = MainTab:CreateInput({
     Name = "Search Models",
     PlaceholderText = SEARCH_PLACEHOLDER,
     RemoveTextAfterFocusLost = false,
     Callback = function(text)
       currentSearch = tostring(text or "")
-      refreshDropdownOptions()
+      -- live listener below will also call rebuild
     end,
   })
 
-  -- Attach LIVE typing updates
+  local function createDropdown(options, selected)
+    return MainTab:CreateDropdown({
+      Name = "Target Models (multi-select)",
+      Options = options,
+      CurrentOption = selected,
+      MultipleOptions = true,
+      Flag = "woodz_models",
+      Callback = function(selection)
+        if suppress then return end
+        local list = {}
+        if typeof(selection) == "table" then
+          for _, v in ipairs(selection) do if typeof(v) == "string" then table.insert(list, v) end end
+        elseif typeof(selection) == "string" then
+          table.insert(list, selection)
+        end
+        farm.setSelected(list)
+      end,
+    })
+  end
+
+  -- initial dropdown
+  modelDropdown = createDropdown(filteredList(), selectedList())
+
+  -- Clear button directly under dropdown
+  MainTab:CreateButton({
+    Name = "Clear All Selections",
+    Callback = function()
+      if handlers.onClearAll then handlers.onClearAll() else farm.setSelected({}) end
+      suppress = true
+      pcall(function() modelDropdown:Set({}) end)
+      suppress = false
+      utils.notify("🌲 Preset", "Cleared all selections.", 3)
+    end,
+  })
+
+  -- Rebuild dropdown (destroy old visually & create a new one) --------------
+  local rebuilding = false
+  local function rebuildDropdown()
+    if rebuilding then return end
+    rebuilding = true
+
+    local wasOpen = isOpen(modelDropdown)
+    local options  = filteredList()
+    local selected = selectedList()
+
+    -- Hide old (can't fully destroy via API in some forks; hide to prevent flicker)
+    setVisibleFalse(modelDropdown)
+
+    -- Create a fresh dropdown with new options, selected retained
+    local newDD = createDropdown(options, selected)
+
+    -- Swap handle
+    modelDropdown = newDD
+
+    -- Re-open if it was open
+    if wasOpen then
+      task.defer(function() safeOpen(modelDropdown) end)
+    end
+
+    rebuilding = false
+  end
+
+  -- Live search: wire to the actual TextBox so it rebuilds as you type
   task.spawn(function()
-    local function tryGetTextBoxFromReturn(obj)
+    local function tryGetTextBox(obj)
       if typeof(obj) == "table" then
         for _, key in ipairs({ "Input", "TextBox", "Box", "Instance", "Object" }) do
           local v = rawget(obj, key)
-          if typeof(v) == "Instance" and v:IsA("TextBox") then
-            return v
-          end
+          if typeof(v) == "Instance" and v:IsA("TextBox") then return v end
         end
       end
       return nil
     end
 
-    local tb = tryGetTextBoxFromReturn(searchInputObj)
+    local tb = tryGetTextBox(searchInput)
     if not tb then
+      -- fallback: quick scan by placeholder
       for _=1,20 do
         for _, root in ipairs({ CoreGui, Players.LocalPlayer:FindFirstChildOfClass("PlayerGui") }) do
           if root then
@@ -220,47 +211,17 @@ function M.build(handlers)
     if tb then
       tb:GetPropertyChangedSignal("Text"):Connect(function()
         currentSearch = tostring(tb.Text or "")
-        refreshDropdownOptions()
+        rebuildDropdown()
       end)
+    else
+      -- As a last resort, rebuild on the CreateInput callback (focus lost typing)
+      -- This case is already covered above via searchInput.Callback -> currentSearch -> rebuildDropdown()
+      searchInput.Callback = function(text)
+        currentSearch = tostring(text or "")
+        rebuildDropdown()
+      end
     end
   end)
-
-  modelDropdown = MainTab:CreateDropdown({
-    Name = "Target Models (multi-select)",
-    Options = filteredList(),
-    CurrentOption = getSelected(),
-    MultipleOptions = true,
-    Flag = "woodz_models",
-    Callback = function(selection)
-      if suppressDropdown then return end
-      local list = {}
-      if typeof(selection) == "table" then
-        for _, v in ipairs(selection) do if typeof(v) == "string" then table.insert(list, v) end end
-      elseif typeof(selection) == "string" then
-        table.insert(list, selection)
-      end
-      farm.setSelected(list)
-      -- no Set() here (prevents re-entry)
-    end,
-  })
-
-  -- Initial sync
-  lastOptionsSig = optionsSignature(filteredList())
-  task.defer(syncDropdownSelectionFromFarm)
-
-  -- 👉 Single button directly under the dropdown
-  MainTab:CreateButton({
-    Name = "Clear All Selections",
-    Callback = function()
-      if handlers.onClearAll then
-        handlers.onClearAll()
-      else
-        farm.setSelected({})
-      end
-      syncDropdownSelectionFromFarm()
-      utils.notify("🌲 Preset", "Cleared all selections.", 3)
-    end,
-  })
 
   --------------------------------------------------------------------------
   -- Farming toggles + current target
@@ -371,8 +332,13 @@ function M.build(handlers)
     setAntiAFK       = function(on)   pcall(function() rfAFK:Set(on and true or false) end) end,
     setFastLevel     = function(on)   pcall(function() rfFastLvl:Set(on and true or false) end) end,
 
-    refreshModelOptions = function() refreshDropdownOptions() end,
-    syncModelSelection  = function() syncDropdownSelectionFromFarm() end,
+    -- If other code needs a manual refresh:
+    refreshModelOptions = function() rebuildDropdown() end,
+    syncModelSelection  = function()
+      suppress = true
+      pcall(function() modelDropdown:Set(selectedList()) end)
+      suppress = false
+    end,
 
     destroy          = function() pcall(function() Rayfield:Destroy() end) end,
   }
