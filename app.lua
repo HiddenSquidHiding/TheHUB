@@ -301,12 +301,14 @@ function app.start()
 					farm.setupAutoAttackRemote()
 					task.spawn(function()
 						farm.runAutoFarm(function() return autoFarmEnabled end, setCurrentTarget)
+								farm.setFastLevelEnabled(true)
 					end)
 					notifyToggle("Auto-Farm", true)
 				end
 			else
 				fastlevel.disable()
 				notifyToggle("Instant Level 70+", false)
+					farm.setFastLevelEnabled(false)
 			end
 		end,
 	})
