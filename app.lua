@@ -290,6 +290,7 @@ function app.start()
   local newState = (v ~= nil) and v or (not fastlevel.isEnabled())
 
   if newState then
+    -- Disable Smart Farm if it was on
     if smartFarmEnabled then
       smartFarmEnabled = false
       rfSet(function() if RF.setSmartFarm then RF.setSmartFarm(false) end end)
@@ -297,9 +298,10 @@ function app.start()
     end
 
     fastlevel.enable()
-    farm.setFastLevelEnabled(true)  -- <<< set flag BEFORE starting auto-farm
+    farm.setFastLevelEnabled(true) -- set flag BEFORE starting auto-farm
     notifyToggle("Instant Level 70+", true, " — targeting Sahur only")
 
+    -- Ensure Auto-Farm is ON (restart if already running so it picks up the flag)
     if not autoFarmEnabled then
       autoFarmEnabled = true
       rfSet(function() if RF.setAutoFarm then RF.setAutoFarm(true) end end)
@@ -309,11 +311,11 @@ function app.start()
       end)
       notifyToggle("Auto-Farm", true)
     else
-      -- If Auto-Farm was already running, it may have captured the old flag.
-      -- Restart it quickly so it picks up FastLevel mode.
+      -- Restart to ensure fast-level flag is applied inside the loop
       autoFarmEnabled = false
       task.wait(0.05)
       autoFarmEnabled = true
+      rfSet(function() if RF.setAutoFarm then RF.setAutoFarm(true) end end)
       farm.setupAutoAttackRemote()
       task.spawn(function()
         farm.runAutoFarm(function() return autoFarmEnabled end, setCurrentTarget)
@@ -321,12 +323,20 @@ function app.start()
     end
 
   else
+    -- Turning Fast Level OFF:
     fastlevel.disable()
-    farm.setFastLevelEnabled(false) -- <<< turn flag off immediately
+    farm.setFastLevelEnabled(false)
     notifyToggle("Instant Level 70+", false)
+
+    -- Also turn OFF Auto-Farm
+    if autoFarmEnabled then
+      autoFarmEnabled = false
+      rfSet(function() if RF.setAutoFarm then RF.setAutoFarm(false) end end)
+      setCurrentTarget("Current Target: None")
+      notifyToggle("Auto-Farm", false)
+    end
   end
 end,
-
 
 	utils.notify("🌲 WoodzHUB", "Rayfield UI only mode active.", 4)
 end
