@@ -1,5 +1,5 @@
 -- ui_rayfield.lua
--- Rayfield overlay UI for WoodzHUB (model picker with live search; recreate dropdown on-the-fly), single "Clear All" button, toggles, status.
+-- Rayfield overlay UI for WoodzHUB (model picker with live search), single "Clear All" button, toggles, status.
 
 local function getUtils()
   local p = script and script.Parent
@@ -40,14 +40,27 @@ function M.build(handlers)
   --------------------------------------------------------------------------
   MainTab:CreateSection("Targets")
 
-  local currentSearch = ""
-  pcall(function() farm.getMonsterModels() end)
+  -- Cache the full list once; we’ll filter locally to avoid side-effects.
+  local allModels = {}
+  pcall(function() allModels = farm.getMonsterModels() or {} end)
 
-  local function filteredList()
-    local list = farm.filterMonsterModels(currentSearch or "")
+  -- If it came back empty (e.g., early load), retry shortly once.
+  if #allModels == 0 then
+    task.delay(1, function()
+      local ok, list = pcall(function() return farm.getMonsterModels() end)
+      if ok and type(list) == "table" then allModels = list end
+    end)
+  end
+
+  -- Filtering (local, side-effect free)
+  local function filteredList(search)
+    search = tostring(search or ""):lower()
+    if search == "" then return table.clone(allModels) end
     local out = {}
-    for _, v in ipairs(list or {}) do
-      if typeof(v) == "string" then table.insert(out, v) end
+    for _, name in ipairs(allModels) do
+      if typeof(name) == "string" and string.find(name:lower(), search, 1, true) then
+        table.insert(out, name)
+      end
     end
     return out
   end
@@ -55,45 +68,63 @@ function M.build(handlers)
   local function selectedList()
     local sel = farm.getSelected() or {}
     local out = {}
-    for _, v in ipairs(sel) do
-      if typeof(v) == "string" then table.insert(out, v) end
-    end
+    for _, v in ipairs(sel) do if typeof(v) == "string" then table.insert(out, v) end end
     return out
   end
 
-  -- --- Dropdown management: recreate instead of refresh --------------------
+  local function toSet(t)
+    local s = {}
+    for _, v in ipairs(t or {}) do s[v] = true end
+    return s
+  end
+
+  -- ——— Dropdown (we recreate it on each search) ———
+  local currentSearch = ""
   local modelDropdown = nil
   local suppress = false
 
-  local function isOpen(drop)
+  local function dd_root(drop)
+    if typeof(drop) ~= "table" then return nil end
+    for _, k in ipairs({ "Dropdown", "Frame", "Holder", "Instance", "Object", "Root" }) do
+      local v = rawget(drop, k)
+      if typeof(v) == "Instance" and v:IsA("Frame") then return v end
+    end
+    return nil
+  end
+
+  local function dd_destroy(drop)
+    if not drop then return end
+    -- Try official Destroy
+    local ok = pcall(function() if drop.Destroy then drop:Destroy() end end)
+    if ok then return end
+    -- Fallback: destroy the root instance
+    local root = dd_root(drop)
+    if root and root.Parent then
+      pcall(function() root:Destroy() end)
+    end
+  end
+
+  local function dd_is_open(drop)
     if not drop then return false end
     local ok, opened = pcall(function() return drop.Opened end)
     if ok and type(opened) == "boolean" then return opened end
     local ok2, res2 = pcall(function() return drop:IsOpen() end)
     if ok2 and type(res2) == "boolean" then return res2 end
-    -- heuristic: visible scrollingframe in its tree
-    local root = typeof(drop) == "table" and (rawget(drop,"Dropdown") or rawget(drop,"Frame") or rawget(drop,"Instance"))
-    if typeof(root) == "Instance" then
-      for _,d in ipairs(root:GetDescendants()) do
+    -- Heuristic: visible scrolling frame under root
+    local root = dd_root(drop)
+    if root then
+      for _, d in ipairs(root:GetDescendants()) do
         if d:IsA("ScrollingFrame") and d.Visible and d.AbsoluteSize.Y > 0 then return true end
       end
     end
     return false
   end
 
-  local function setVisibleFalse(drop)
-    local root = typeof(drop) == "table" and (rawget(drop,"Dropdown") or rawget(drop,"Frame") or rawget(drop,"Instance"))
-    if typeof(root) == "Instance" then
-      root.Visible = false
-    end
-  end
-
-  local function safeOpen(drop)
+  local function dd_open(drop)
     if not drop then return end
     pcall(function() if drop.Open then drop:Open() end end)
-    -- a few forks need a header click; try to click any internal button
-    local root = typeof(drop) == "table" and (rawget(drop,"Dropdown") or rawget(drop,"Frame") or rawget(drop,"Instance"))
-    if typeof(root) == "Instance" then
+    local root = dd_root(drop)
+    if root then
       for _, d in ipairs(root:GetDescendants()) do
         if d:IsA("TextButton") or d:IsA("ImageButton") then
           pcall(function() d:Activate() end)
@@ -102,18 +133,6 @@ function M.build(handlers)
       end
     end
   end
-
-  -- anchor elements to keep layout stable
-  local SEARCH_PLACEHOLDER = "Type model names to filter…"
-  local searchInput = MainTab:CreateInput({
-    Name = "Search Models",
-    PlaceholderText = SEARCH_PLACEHOLDER,
-    RemoveTextAfterFocusLost = false,
-    Callback = function(text)
-      currentSearch = tostring(text or "")
-      -- live listener below will also call rebuild
-    end,
-  })
 
   local function createDropdown(options, selected)
     return MainTab:CreateDropdown({
@@ -135,49 +154,41 @@ function M.build(handlers)
     })
   end
 
-  -- initial dropdown
-  modelDropdown = createDropdown(filteredList(), selectedList())
+  local function rebuildDropdown()
+    local wasOpen = dd_is_open(modelDropdown)
+    local options  = filteredList(currentSearch)
+    local selected = selectedList()
 
-  -- Clear button directly under dropdown
-  MainTab:CreateButton({
-    Name = "Clear All Selections",
-    Callback = function()
-      if handlers.onClearAll then handlers.onClearAll() else farm.setSelected({}) end
-      suppress = true
-      pcall(function() modelDropdown:Set({}) end)
-      suppress = false
-      utils.notify("🌲 Preset", "Cleared all selections.", 3)
+    -- Keep selection only for items still present after filter
+    local optSet = toSet(options)
+    local keep = {}
+    for _, v in ipairs(selected) do if optSet[v] then table.insert(keep, v) end end
+
+    -- Destroy old dropdown cleanly, then create a fresh one
+    dd_destroy(modelDropdown)
+    suppress = true
+    modelDropdown = createDropdown(options, keep)
+    suppress = false
+
+    if wasOpen then task.defer(function() dd_open(modelDropdown) end) end
+  end
+
+  -- Initial dropdown
+  modelDropdown = createDropdown(filteredList(""), selectedList())
+
+  -- Search input (ALWAYS rebuild in callback so it works even if we can't hook TextBox)
+  local SEARCH_PLACEHOLDER = "Type model names to filter…"
+  local searchInput = MainTab:CreateInput({
+    Name = "Search Models",
+    PlaceholderText = SEARCH_PLACEHOLDER,
+    RemoveTextAfterFocusLost = false,
+    Callback = function(text)
+      currentSearch = tostring(text or "")
+      rebuildDropdown()
     end,
   })
 
-  -- Rebuild dropdown (destroy old visually & create a new one) --------------
-  local rebuilding = false
-  local function rebuildDropdown()
-    if rebuilding then return end
-    rebuilding = true
-
-    local wasOpen = isOpen(modelDropdown)
-    local options  = filteredList()
-    local selected = selectedList()
-
-    -- Hide old (can't fully destroy via API in some forks; hide to prevent flicker)
-    setVisibleFalse(modelDropdown)
-
-    -- Create a fresh dropdown with new options, selected retained
-    local newDD = createDropdown(options, selected)
-
-    -- Swap handle
-    modelDropdown = newDD
-
-    -- Re-open if it was open
-    if wasOpen then
-      task.defer(function() safeOpen(modelDropdown) end)
-    end
-
-    rebuilding = false
-  end
-
-  -- Live search: wire to the actual TextBox so it rebuilds as you type
+  -- Try to also hook live typing (nice-to-have; callback above already works)
   task.spawn(function()
     local function tryGetTextBox(obj)
       if typeof(obj) == "table" then
@@ -188,10 +199,8 @@ function M.build(handlers)
       end
       return nil
     end
-
     local tb = tryGetTextBox(searchInput)
     if not tb then
-      -- fallback: quick scan by placeholder
       for _=1,20 do
         for _, root in ipairs({ CoreGui, Players.LocalPlayer:FindFirstChildOfClass("PlayerGui") }) do
           if root then
@@ -207,21 +216,25 @@ function M.build(handlers)
         task.wait(0.05)
       end
     end
-
     if tb then
       tb:GetPropertyChangedSignal("Text"):Connect(function()
         currentSearch = tostring(tb.Text or "")
         rebuildDropdown()
       end)
-    else
-      -- As a last resort, rebuild on the CreateInput callback (focus lost typing)
-      -- This case is already covered above via searchInput.Callback -> currentSearch -> rebuildDropdown()
-      searchInput.Callback = function(text)
-        currentSearch = tostring(text or "")
-        rebuildDropdown()
-      end
     end
   end)
+
+  -- Clear button directly under dropdown
+  MainTab:CreateButton({
+    Name = "Clear All Selections",
+    Callback = function()
+      if handlers.onClearAll then handlers.onClearAll() else farm.setSelected({}) end
+      suppress = true
+      pcall(function() if modelDropdown and modelDropdown.Set then modelDropdown:Set({}) end end)
+      suppress = false
+      utils.notify("🌲 Preset", "Cleared all selections.", 3)
+    end,
+  })
 
   --------------------------------------------------------------------------
   -- Farming toggles + current target
@@ -310,7 +323,7 @@ function M.build(handlers)
   })
 
   --------------------------------------------------------------------------
-  -- Optional: HUD auto-hide (same behavior you had before)
+  -- Optional: HUD auto-hide
   --------------------------------------------------------------------------
   do
     local flags = { premiumHidden=true, vipHidden=true, limitedPetHidden=true }
@@ -332,11 +345,19 @@ function M.build(handlers)
     setAntiAFK       = function(on)   pcall(function() rfAFK:Set(on and true or false) end) end,
     setFastLevel     = function(on)   pcall(function() rfFastLvl:Set(on and true or false) end) end,
 
-    -- If other code needs a manual refresh:
-    refreshModelOptions = function() rebuildDropdown() end,
+    -- If your code wants to refresh available models from Workspace (e.g., after map change):
+    refreshModelOptions = function()
+      local ok, list = pcall(function() return farm.getMonsterModels() end)
+      if ok and type(list) == "table" then
+        allModels = list
+        rebuildDropdown()
+      end
+    end,
+
+    -- Sync UI selection from farm
     syncModelSelection  = function()
       suppress = true
-      pcall(function() modelDropdown:Set(selectedList()) end)
+      pcall(function() if modelDropdown and modelDropdown.Set then modelDropdown:Set(selectedList()) end end)
       suppress = false
     end,
 
