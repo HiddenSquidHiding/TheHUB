@@ -1,13 +1,13 @@
 -- init.lua
--- Bootloader that fetches modules from GitHub, injects sibling requires,
--- and dispatches per-game behavior via games.lua (profiles + optional run).
+-- Bootloader: fetches from GitHub, injects sibling requires, supports per-game profiles,
+-- and provides lazy sibling autoloading so require(script.Parent.X) never becomes nil.
 
 -- 👉 Adjust BASE to your repo layout.
 local BASE = 'https://raw.githubusercontent.com/HiddenSquidHiding/TheHUB/main/'
 
--- -------------------------------------------------------------------
--- Fetch + cached "use" (for simple, standalone Lua modules)
--- -------------------------------------------------------------------
+----------------------------------------------------------------------
+-- Fetch + cached "use" (for simple return-table modules)
+----------------------------------------------------------------------
 local function fetch(path)
   local ok, res = pcall(function() return game:HttpGet(BASE .. path) end)
   if not ok then error(('[init] Failed to fetch %s: %s'):format(path, tostring(res))) end
@@ -27,9 +27,9 @@ local function use(path)
   return mod
 end
 
--- -------------------------------------------------------------------
--- Embedded utils (lightweight, safe for siblings)
--- -------------------------------------------------------------------
+----------------------------------------------------------------------
+-- Embedded utils (lightweight)
+----------------------------------------------------------------------
 local utils = (function()
   local Players   = game:GetService('Players')
   local Workspace = game:GetService('Workspace')
@@ -47,7 +47,7 @@ local utils = (function()
     task.spawn(function() task.wait(duration or 5) ScreenGui:Destroy() end)
   end
   function M.waitForCharacter()
-    local player = game:GetService('Players').LocalPlayer
+    local player = Players.LocalPlayer
     while not player.Character or not player.Character:FindFirstChild('HumanoidRootPart') or not player.Character:FindFirstChild('Humanoid') do
       player.CharacterAdded:Wait(); task.wait(0.1)
     end
@@ -62,7 +62,7 @@ local utils = (function()
     if not model then return nil end
     local names={'HumanoidRootPart','PrimaryPart','Body','Hitbox','Root','Main'}
     for _,n in ipairs(names) do local part=model:FindFirstChild(n); if part and part:IsA('BasePart') then return part end end
-    for _,d in ipairs(model:GetDescendants()) do if d:IsA('BasePart') then return d end end
+    for _,d in ipairs(Workspace:GetDescendants()) do if d:IsA('BasePart') then return d end end
     return nil
   end
   function M.searchFoldersList()
@@ -75,9 +75,9 @@ end)()
 
 _G.__WOODZ_UTILS = utils
 
--- -------------------------------------------------------------------
--- Sibling-aware loader (so require(script.Parent.X) works)
--- -------------------------------------------------------------------
+----------------------------------------------------------------------
+-- Sibling-aware loader + LAZY AUTOLOAD
+----------------------------------------------------------------------
 local siblings = { _deps = { utils = utils } }
 
 local function loadWithSiblings(path, sibs)
@@ -85,7 +85,7 @@ local function loadWithSiblings(path, sibs)
   sibs._deps.utils = sibs._deps.utils or utils
   local src = fetch(path)
   local chunk = loadstring(src, '='..path)
-  assert(chunk)
+  assert(chunk, ('[loader] compile failed for %s'):format(path))
   local baseEnv = getfenv()
   local fakeScript = { Parent = sibs }
   local function shimRequire(target)
@@ -104,35 +104,41 @@ local function loadWithSiblings(path, sibs)
   return chunk()
 end
 
--- -------------------------------------------------------------------
--- Core shared tables (these are safe to load with simple use())
--- -------------------------------------------------------------------
+-- 🔁 Lazy autoload: script.Parent.<name> → fetch "<name>.lua" on first access
+setmetatable(siblings, {
+  __index = function(t, k)
+    if k == nil or k == "_deps" then return rawget(t, k) end
+    local filename = tostring(k) .. ".lua"
+    local ok, mod = pcall(function() return loadWithSiblings(filename, siblings) end)
+    if ok and mod ~= nil then
+      rawset(t, k, mod)
+      return mod
+    end
+    -- leave nil if not found; require(nil) will still error with clear message
+    return nil
+  end
+})
+
+----------------------------------------------------------------------
+-- Core shared tables
+----------------------------------------------------------------------
 local constants     = use('constants.lua')
 local data_monsters = use('data_monsters.lua')
-
--- Make them visible to siblings
 siblings.constants     = constants
 siblings.data_monsters = data_monsters
 
--- HUD is a sibling-loaded module (uses utils, etc.)
+-- HUD (uses utils) — preload once
 local hud = loadWithSiblings('hud.lua', siblings)
 siblings.hud = hud
 
--- -------------------------------------------------------------------
+----------------------------------------------------------------------
 -- Profile selection via games.lua
--- Supports keys:
---   - "place:<placeId>"
---   - "universe:<universeId>"
---   - "<universeId>"  (tostring(game.GameId))
--- and a "default" profile.
--- Optional field: profile.run = "module_name" (ModuleScript to require())
--- -------------------------------------------------------------------
+----------------------------------------------------------------------
 local function selectProfile()
-  local games = use('games.lua')  -- returns a table
+  local games = use('games.lua')  -- table
   local placeKey    = "place:" .. tostring(game.PlaceId)
   local universeStr = tostring(game.GameId)
   local universeKey = "universe:" .. universeStr
-
   local prof = nil
   if type(games) == "table" then
     prof = games[placeKey] or games[universeKey] or games[universeStr] or games.default
@@ -142,10 +148,9 @@ end
 
 local profile = selectProfile()
 
--- -------------------------------------------------------------------
--- Optional: preload modules declared in profile.modules so siblings
--- has them ready (lets app/ui require(script.Parent.X) cleanly).
--- -------------------------------------------------------------------
+----------------------------------------------------------------------
+-- Optional eager preload (still useful for early errors)
+----------------------------------------------------------------------
 local function preloadModules(modNames)
   if type(modNames) ~= "table" then return end
   for _, name in ipairs(modNames) do
@@ -159,26 +164,23 @@ local function preloadModules(modNames)
   end
 end
 
--- -------------------------------------------------------------------
--- Boot logic
--- 1) If profile.run exists, require that module and stop.
--- 2) Else, preload any profile.modules, then start the normal app.lua.
--- -------------------------------------------------------------------
+----------------------------------------------------------------------
+-- Boot
+----------------------------------------------------------------------
 local function boot()
   if not profile or type(profile) ~= "table" then
-    -- No profile, default to app.lua
+    -- Default hub
     local app = loadWithSiblings('app.lua', siblings)
     app.start()
     utils.notify('🌲 WoodzHUB', 'Loaded (no profile).', 4)
     return
   end
 
-  -- Direct runner (e.g. brainrot_dungeon_rayfield)
+  -- Direct runner if specified (e.g. brainrot_dungeon_rayfield.lua)
   if type(profile.run) == "string" and #profile.run > 0 then
     local runnerPath = profile.run .. '.lua'
     local ok, err = pcall(function()
       local mod = loadWithSiblings(runnerPath, siblings)
-      -- If the module returns a function "start", call it (optional)
       if type(mod) == "table" and type(mod.start) == "function" then
         mod.start()
       end
@@ -189,7 +191,7 @@ local function boot()
     return
   end
 
-  -- Preload declared modules for this profile (so app/ui can require them)
+  -- Preload declared modules (optional; lazy autoload still handles the rest)
   if profile.modules then
     preloadModules(profile.modules)
   end
@@ -200,5 +202,4 @@ local function boot()
   utils.notify('🌲 WoodzHUB', ('Loaded profile: %s'):format(profile.name or "Unnamed"), 4)
 end
 
--- Go!
 boot()
