@@ -285,33 +285,47 @@ function app.start()
 
 		-- Instant Level 70+
 		onFastLevelToggle = function(v)
-			if suppressRF then return end
-			local newState = (v ~= nil) and v or (not fastlevel.isEnabled())
-			if newState then
-				if smartFarmEnabled then
-					smartFarmEnabled = false
-					rfSet(function() if RF.setSmartFarm then RF.setSmartFarm(false) end end)
-					notifyToggle("Smart Farm", false)
-				end
-				fastlevel.enable()
-				notifyToggle("Instant Level 70+", true, " — targeting Sahur only")
-				if not autoFarmEnabled then
-					autoFarmEnabled = true
-					rfSet(function() if RF.setAutoFarm then RF.setAutoFarm(true) end end)
-					farm.setupAutoAttackRemote()
-					task.spawn(function()
-						farm.runAutoFarm(function() return autoFarmEnabled end, setCurrentTarget)
-								farm.setFastLevelEnabled(true)
-					end)
-					notifyToggle("Auto-Farm", true)
-				end
-			else
-				fastlevel.disable()
-				notifyToggle("Instant Level 70+", false)
-					farm.setFastLevelEnabled(false)
-			end
-		end,
-	})
+  if suppressRF then return end
+  local newState = (v ~= nil) and v or (not fastlevel.isEnabled())
+
+  if newState then
+    if smartFarmEnabled then
+      smartFarmEnabled = false
+      rfSet(function() if RF.setSmartFarm then RF.setSmartFarm(false) end end)
+      notifyToggle("Smart Farm", false)
+    end
+
+    fastlevel.enable()
+    farm.setFastLevelEnabled(true)  -- <<< set flag BEFORE starting auto-farm
+    notifyToggle("Instant Level 70+", true, " — targeting Sahur only")
+
+    if not autoFarmEnabled then
+      autoFarmEnabled = true
+      rfSet(function() if RF.setAutoFarm then RF.setAutoFarm(true) end end)
+      farm.setupAutoAttackRemote()
+      task.spawn(function()
+        farm.runAutoFarm(function() return autoFarmEnabled end, setCurrentTarget)
+      end)
+      notifyToggle("Auto-Farm", true)
+    else
+      -- If Auto-Farm was already running, it may have captured the old flag.
+      -- Restart it quickly so it picks up FastLevel mode.
+      autoFarmEnabled = false
+      task.wait(0.05)
+      autoFarmEnabled = true
+      farm.setupAutoAttackRemote()
+      task.spawn(function()
+        farm.runAutoFarm(function() return autoFarmEnabled end, setCurrentTarget)
+      end)
+    end
+
+  else
+    fastlevel.disable()
+    farm.setFastLevelEnabled(false) -- <<< turn flag off immediately
+    notifyToggle("Instant Level 70+", false)
+  end
+end,
+
 
 	utils.notify("🌲 WoodzHUB", "Rayfield UI only mode active.", 4)
 end
