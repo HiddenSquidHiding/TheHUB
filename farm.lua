@@ -2,8 +2,8 @@
 -- Auto-farm with smooth constraint-based follow (no glide, no judder).
 -- Uses local data from data_monsters.lua (Weather / To Sahur / Forced).
 -- Weather Events: 30s timeout. Non-weather: skip if HP doesn't drop for 3s.
--- 🔸 Weather preemption: if "Weather Events" is selected, immediately switch
--- to a weather mob the moment one appears, even if you're mid-fight.
+-- 🔸 Weather preemption with TTK: if Weather is selected and a Weather mob appears,
+-- we estimate TTK; only switch immediately if estimated TTK ≤ 5s.
 
 -- 🔧 Utils + data
 local function getUtils()
@@ -29,13 +29,18 @@ local M = {}
 ----------------------------------------------------------------------
 -- Config
 ----------------------------------------------------------------------
-local WEATHER_TIMEOUT               = 30   -- seconds (Weather Events only)
-local NON_WEATHER_STALL_TIMEOUT     = 3    -- seconds without HP decreasing → skip
+local WEATHER_TIMEOUT               = 30    -- seconds (Weather Events only)
+local NON_WEATHER_STALL_TIMEOUT     = 3     -- seconds without HP decreasing → skip
 local ABOVE_OFFSET                  = Vector3.new(0, 20, 0)
 
+-- Weather preemption config
+local WEATHER_TTK_LIMIT             = 5.0   -- seconds — only switch if estimated TTK ≤ this
+local WEATHER_PROBE_TIME            = 0.35  -- seconds to sample DPS on a weather mob (quick)
+local WEATHER_PREEMPT_POLL          = 0.2   -- seconds between preemption checks during a fight
+
 -- Constraint tuning (adjust if you ever want snappier/slower follow)
-local POS_RESPONSIVENESS            = 200     -- higher = snappier
-local POS_MAX_FORCE                 = 1e9     -- plenty
+local POS_RESPONSIVENESS            = 200   -- higher = snappier
+local POS_MAX_FORCE                 = 1e9   -- plenty
 local ORI_RESPONSIVENESS            = 200
 local ORI_MAX_TORQUE                = 1e9
 
@@ -70,17 +75,30 @@ local function isWeatherSelected()
   return table.find(selectedMonsterModels, "Weather Events") ~= nil
 end
 
-local function anyAliveWeather()
-  if not isWeatherSelected() then return false end
+local function findWeatherEnemies()
+  if not isWeatherSelected() then return {} end
+  local out = {}
   for _, node in ipairs(Workspace:GetDescendants()) do
     if node:IsA("Model") and not Players:GetPlayerFromCharacter(node) then
       local h = node:FindFirstChildOfClass("Humanoid")
       if h and h.Health > 0 and isWeatherName(node.Name) then
-        return true
+        table.insert(out, node)
       end
     end
   end
-  return false
+  return out
+end
+
+local function pickLowestHPWeather()
+  local list = findWeatherEnemies()
+  local best, bestHP = nil, math.huge
+  for _, m in ipairs(list) do
+    local h = m:FindFirstChildOfClass("Humanoid")
+    if h and h.Health > 0 and h.Health < bestHP then
+      best, bestHP = m, h.Health
+    end
+  end
+  return best
 end
 
 function M.getSelected() return selectedMonsterModels end
@@ -318,6 +336,35 @@ local function makeSmoothFollow(hrp)
 end
 
 ----------------------------------------------------------------------
+-- Weather TTK estimator (quick probe without moving)
+----------------------------------------------------------------------
+local function estimateTTK(enemy, probeTime)
+  if not enemy or not enemy.Parent then return math.huge end
+  local hum = enemy:FindFirstChildOfClass("Humanoid")
+  if not hum or hum.Health <= 0 then return math.huge end
+  local part = enemy:FindFirstChild("HumanoidRootPart") or findBasePart(enemy)
+  if not part or not autoAttackRemote then return math.huge end
+
+  local h0 = hum.Health
+  local t0 = tick()
+  local tEnd = t0 + (probeTime or WEATHER_PROBE_TIME)
+
+  -- Fire at a modest cadence; we don't reposition the player.
+  while tick() < tEnd and enemy.Parent and hum.Health > 0 do
+    pcall(function() autoAttackRemote:InvokeServer(part.CFrame) end)
+    RunService.Heartbeat:Wait()
+  end
+
+  local elapsed = math.max(0.05, tick() - t0)
+  local h1 = hum.Health
+  local dps = (h0 - h1) / elapsed
+  if dps <= 0 then return math.huge end
+
+  local ttk = h1 / dps
+  return ttk
+end
+
+----------------------------------------------------------------------
 -- Public: run auto farm
 ----------------------------------------------------------------------
 function M.runAutoFarm(flagGetter, setTargetText)
@@ -405,7 +452,7 @@ function M.runAutoFarm(flagGetter, setTargetText)
         lastHealth = h
       end)
 
-      -- attack loop with weather preemption
+      -- attack loop with weather preemption + TTK
       local lastWeatherPoll = 0
       while flagGetter() and enemy.Parent and eh.Health > 0 do
         local partNow = findBasePart(enemy) or targetPart
@@ -434,14 +481,21 @@ function M.runAutoFarm(flagGetter, setTargetText)
           break
         end
 
-        -- 🔸 Weather preemption:
-        -- if Weather is selected and any weather mob is alive,
-        -- and we're NOT already on a weather mob, immediately switch.
-        if not isWeather and (now - lastWeatherPoll) >= 0.1 then
+        -- 🔸 Weather preemption with TTK:
+        -- If we're NOT on a weather mob, periodically check for a weather target.
+        -- When one exists, quickly estimate DPS→TTK; only switch if TTK ≤ limit.
+        if not isWeather and (now - lastWeatherPoll) >= WEATHER_PREEMPT_POLL and isWeatherSelected() then
           lastWeatherPoll = now
-          if anyAliveWeather() then
-            utils.notify("🌲 Auto-Farm", "Weather target detected — switching immediately.", 2)
-            break
+          local candidate = pickLowestHPWeather()
+          if candidate and candidate ~= enemy then
+            local ttk = estimateTTK(candidate, WEATHER_PROBE_TIME)
+            if ttk <= WEATHER_TTK_LIMIT then
+              utils.notify("🌲 Auto-Farm", ("Weather target detected (TTK≈%0.1fs) — switching."):format(ttk), 2)
+              break
+            else
+              -- Ignore weather mob that would take too long
+              -- (do nothing; continue current fight)
+            end
           end
         end
 
