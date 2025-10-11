@@ -35,6 +35,10 @@ return {
     "Crocodillitos Crate",
     "Pipi Kiwi Boss",
     "Los OrcoIocos",
+    "Los Karkerkirkursitos",
+    "Pkin Kin Kin Kin Kun",
+    "Pkin Kin Kin Kin Kin Kun",
+    "Candy Pile",
   },
 
   forcedMonsters = {
