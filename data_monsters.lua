@@ -40,6 +40,7 @@ return {
     "Pkin Kin Kin Kin Kun",
     "Pkin Kin Kin Kin Kin Kun",
     "Candy Pile",
+    "Pumpkin Crate",
   },
 
   forcedMonsters = {
