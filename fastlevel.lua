@@ -12,7 +12,7 @@ end
 local utils = getUtils()
 local farm  = require(script.Parent.farm)
 
-local TARGET = "Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Sarur"
+local TARGET = "Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Sarur"
 
 local M = {
   _enabled = false,
