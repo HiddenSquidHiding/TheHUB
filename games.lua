@@ -19,7 +19,7 @@ return {
   -- Example profile — replace the key with your universeId (GameId)
   -- tostring(game.GameId)
   --------------------------------------------------------------------
-  ["0000000000000000000"] = {
+  ["place:111989938562194"] = {
     name = "Brainrot Evolution",
     modules = {
       "anti_afk","farm","smart_target","merchants","crates",
@@ -30,6 +30,17 @@ return {
       autoFarm = true,      smartFarm = true,
       merchants = true,     crates = true,  antiAFK = true,
       redeemCodes = true,   fastlevel = true, privateServer = true,
+    },
+  },
+
+    ["place:90608986169653"] = {
+    name = "Brainrot Evolution Dungeon",
+    modules = {
+      "anti_afk","redeem_unredeemed_codes""
+    },
+    ui = {
+      currentTarget = true,    antiAFK = true,
+      redeemCodes = true,   privateServer = true,
     },
   },
 
