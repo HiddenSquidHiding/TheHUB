@@ -2,8 +2,8 @@
 -- Auto-farm with smooth constraint-based follow (no glide, no judder).
 -- Uses local data from data_monsters.lua (Weather / To Sahur / Forced).
 -- Weather Events: 30s timeout. Non-weather: skip if HP doesn't drop for 3s.
--- 🔸 Weather preemption with TTK: if Weather is selected and a Weather mob appears,
--- we estimate TTK; only switch immediately if estimated TTK ≤ 5s.
+-- 🔸 Weather preemption with TTK (≤ 5s) — will switch mid-fight if fast to kill.
+-- 🔸 FastLevel mode: ignores the 3s stall rule (never breaks for "no HP change").
 
 -- 🔧 Utils + data
 local function getUtils()
@@ -14,7 +14,7 @@ local function getUtils()
 end
 
 local utils  = getUtils()
-local data   = require(script.Parent.data_monsters) -- <-- using your local data
+local data   = require(script.Parent.data_monsters)
 
 -- Services
 local Players           = game:GetService("Players")
@@ -30,7 +30,7 @@ local M = {}
 -- Config
 ----------------------------------------------------------------------
 local WEATHER_TIMEOUT               = 30    -- seconds (Weather Events only)
-local NON_WEATHER_STALL_TIMEOUT     = 3     -- seconds without HP decreasing → skip
+local NON_WEATHER_STALL_TIMEOUT     = 3     -- seconds without HP decreasing → skip (disabled in FastLevel mode)
 local ABOVE_OFFSET                  = Vector3.new(0, 20, 0)
 
 -- Weather preemption config
@@ -38,9 +38,9 @@ local WEATHER_TTK_LIMIT             = 5.0   -- seconds — only switch if estima
 local WEATHER_PROBE_TIME            = 0.35  -- seconds to sample DPS on a weather mob (quick)
 local WEATHER_PREEMPT_POLL          = 0.2   -- seconds between preemption checks during a fight
 
--- Constraint tuning (adjust if you ever want snappier/slower follow)
-local POS_RESPONSIVENESS            = 200   -- higher = snappier
-local POS_MAX_FORCE                 = 1e9   -- plenty
+-- Constraint tuning
+local POS_RESPONSIVENESS            = 200
+local POS_MAX_FORCE                 = 1e9
 local ORI_RESPONSIVENESS            = 200
 local ORI_MAX_TORQUE                = 1e9
 
@@ -101,6 +101,12 @@ local function pickLowestHPWeather()
   return best
 end
 
+-- 🔸 FastLevel mode flag (set from app/fastlevel toggle)
+local FASTLEVEL_MODE = false
+function M.setFastLevelEnabled(on)
+  FASTLEVEL_MODE = on and true or false
+end
+
 function M.getSelected() return selectedMonsterModels end
 function M.setSelected(list)
   selectedMonsterModels = {}
@@ -137,7 +143,6 @@ function M.getMonsterModels()
     end
   end
 
-  -- include any locally forced names from data
   if data and data.forcedMonsters then
     for _, nm in ipairs(data.forcedMonsters) do pushUnique(valid, nm) end
   end
@@ -295,12 +300,10 @@ end
 -- Smooth follow via constraints (created once per fight, cleaned each time)
 ----------------------------------------------------------------------
 local function makeSmoothFollow(hrp)
-  -- attachments
   local a0 = Instance.new("Attachment")
   a0.Name = "WoodzHub_A0"
   a0.Parent = hrp
 
-  -- AlignPosition
   local ap = Instance.new("AlignPosition")
   ap.Name = "WoodzHub_AP"
   ap.Mode = Enum.PositionAlignmentMode.OneAttachment
@@ -311,7 +314,6 @@ local function makeSmoothFollow(hrp)
   ap.RigidityEnabled = false
   ap.Parent = hrp
 
-  -- AlignOrientation
   local ao = Instance.new("AlignOrientation")
   ao.Name = "WoodzHub_AO"
   ao.Mode = Enum.OrientationAlignmentMode.OneAttachment
@@ -321,16 +323,13 @@ local function makeSmoothFollow(hrp)
   ao.RigidityEnabled = false
   ao.Parent = hrp
 
-  -- controller API
   local ctl = {}
   function ctl:setGoal(cf)
     ap.Position = cf.Position
     ao.CFrame  = cf.Rotation
   end
   function ctl:destroy()
-    ap:Destroy()
-    ao:Destroy()
-    a0:Destroy()
+    ap:Destroy(); ao:Destroy(); a0:Destroy()
   end
   return ctl
 end
@@ -349,7 +348,6 @@ local function estimateTTK(enemy, probeTime)
   local t0 = tick()
   local tEnd = t0 + (probeTime or WEATHER_PROBE_TIME)
 
-  -- Fire at a modest cadence; we don't reposition the player.
   while tick() < tEnd and enemy.Parent and hum.Health > 0 do
     pcall(function() autoAttackRemote:InvokeServer(part.CFrame) end)
     RunService.Heartbeat:Wait()
@@ -401,29 +399,25 @@ function M.runAutoFarm(flagGetter, setTargetText)
       local eh = enemy:FindFirstChildOfClass("Humanoid")
       if not eh or eh.Health <= 0 then continue end
 
-      -- plan initial hop position
+      -- initial hop above target
       local okPivot, pcf = pcall(function() return enemy:GetPivot() end)
       local targetCF = (okPivot and isValidCFrame(pcf)) and (pcf * CFrame.new(ABOVE_OFFSET)) or nil
       if not targetCF then continue end
-
-      -- instant hop (replicated) — prevents glide
       hardTeleport(targetCF)
 
-      -- reacquire bits after hop
+      -- reacquire after hop
       character = player.Character
       hum = character and character:FindFirstChildOfClass("Humanoid")
       hrp = character and character:FindFirstChild("HumanoidRootPart")
       if not character or not hum or not hrp then continue end
 
-      -- calm physics but keep replication
       local oldPS = hum.PlatformStand
       hum.PlatformStand = true
       zeroVel(hrp)
 
-      -- constraint controller for smooth lock above target
       local ctl = makeSmoothFollow(hrp)
 
-      -- resolve a concrete part to follow
+      -- resolve a concrete part
       local targetPart = findBasePart(enemy)
       if not targetPart then
         local t0 = tick()
@@ -440,7 +434,7 @@ function M.runAutoFarm(flagGetter, setTargetText)
 
       label(("Current Target: %s (Health: %s)"):format(enemy.Name, math.floor(eh.Health)))
 
-      -- timers for weather + stall
+      -- timers/state
       local isWeather   = isWeatherName(enemy.Name)
       local lastHealth  = eh.Health
       local lastDropAt  = tick()
@@ -452,38 +446,35 @@ function M.runAutoFarm(flagGetter, setTargetText)
         lastHealth = h
       end)
 
-      -- attack loop with weather preemption + TTK
+      -- attack loop (with weather preemption + FastLevel stall override)
       local lastWeatherPoll = 0
       while flagGetter() and enemy.Parent and eh.Health > 0 do
         local partNow = findBasePart(enemy) or targetPart
         if not partNow then break end
 
-        -- desired pose above enemy (smooth via constraints; no judder)
         local desired = partNow.CFrame * CFrame.new(ABOVE_OFFSET)
         ctl:setGoal(desired)
 
-        -- attack
         local hrpTarget = enemy:FindFirstChild("HumanoidRootPart")
         if hrpTarget and autoAttackRemote then
           pcall(function() autoAttackRemote:InvokeServer(hrpTarget.CFrame) end)
         end
 
-        -- Weather-only timeout
         local now = tick()
+
+        -- Weather timeout applies regardless of FastLevel
         if isWeather and (now - startedAt) > WEATHER_TIMEOUT then
           utils.notify("🌲 Auto-Farm", ("Weather Event timeout on %s after %ds."):format(enemy.Name, WEATHER_TIMEOUT), 3)
           break
         end
 
-        -- Non-weather stall detection
-        if not isWeather and (now - lastDropAt) > NON_WEATHER_STALL_TIMEOUT then
+        -- 🔸 Stall detection (disabled in FastLevel mode for non-weather)
+        if (not isWeather) and (not FASTLEVEL_MODE) and ((now - lastDropAt) > NON_WEATHER_STALL_TIMEOUT) then
           utils.notify("🌲 Auto-Farm", ("Skipping %s (no HP change for %0.1fs)"):format(enemy.Name, NON_WEATHER_STALL_TIMEOUT), 3)
           break
         end
 
-        -- 🔸 Weather preemption with TTK:
-        -- If we're NOT on a weather mob, periodically check for a weather target.
-        -- When one exists, quickly estimate DPS→TTK; only switch if TTK ≤ limit.
+        -- 🔸 Weather preemption with TTK (only when not already on weather)
         if not isWeather and (now - lastWeatherPoll) >= WEATHER_PREEMPT_POLL and isWeatherSelected() then
           lastWeatherPoll = now
           local candidate = pickLowestHPWeather()
@@ -492,9 +483,6 @@ function M.runAutoFarm(flagGetter, setTargetText)
             if ttk <= WEATHER_TTK_LIMIT then
               utils.notify("🌲 Auto-Farm", ("Weather target detected (TTK≈%0.1fs) — switching."):format(ttk), 2)
               break
-            else
-              -- Ignore weather mob that would take too long
-              -- (do nothing; continue current fight)
             end
           end
         end
@@ -505,7 +493,6 @@ function M.runAutoFarm(flagGetter, setTargetText)
       if hcConn then hcConn:Disconnect() end
       label("Current Target: None")
 
-      -- cleanup + restore
       ctl:destroy()
       if hum and hum.Parent then
         hum.PlatformStand = oldPS
