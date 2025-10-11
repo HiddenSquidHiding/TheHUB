@@ -162,6 +162,7 @@ function app.start()
 			autoFarmEnabled = newState
 
 			if autoFarmEnabled then
+				farm.setFastLevelEnabled(fastlevel.isEnabled())
 				farm.setupAutoAttackRemote()
 				local sel = farm.getSelected()
 				local extra = (sel and #sel > 0) and (" for: " .. table.concat(sel, ", ")) or ""
