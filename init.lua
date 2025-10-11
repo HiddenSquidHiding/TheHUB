@@ -1,5 +1,6 @@
 -- init.lua
--- 👉 Adjust BASE to your repo layout.
+-- Loads modules from GitHub, injects utils, and routes per-game via games.lua.
+
 local BASE = 'https://raw.githubusercontent.com/HiddenSquidHiding/TheHUB/main/'
 
 local function fetch(path)
@@ -21,7 +22,7 @@ local function use(path)
   return mod
 end
 
--- --- Embedded utils -------------------------------------------------------
+-- --- Embedded utils -------------------------------------------------
 local utils = (function()
   local Players   = game:GetService('Players')
   local Workspace = game:GetService('Workspace')
@@ -73,11 +74,7 @@ local function loadWithSiblings(path, sibs)
   sibs._deps = sibs._deps or {}
   sibs._deps.utils = sibs._deps.utils or utils
   local src = fetch(path)
-
-  -- 👇 capture compile errors instead of a blind assert
-  local chunk, err = loadstring(src, '='..path)
-  assert(chunk, ('[loader] compile failed for %s: %s'):format(path, tostring(err)))
-
+  local chunk = loadstring(src, '='..path); assert(chunk)
   local baseEnv = getfenv()
   local fakeScript = { Parent = sibs }
   local function shimRequire(target)
@@ -96,29 +93,47 @@ local function loadWithSiblings(path, sibs)
   return chunk()
 end
 
-
 -- Core tables via simple use()
 local constants     = use('constants.lua')
 local data_monsters = use('data_monsters.lua')
 
--- ✅ Inject table modules as siblings so `require(script.Parent.xxx)` works
-siblings.constants     = constants
-siblings.data_monsters = data_monsters
+-- Sibling-loaded: HUD is generally useful
+local hud = loadWithSiblings('hud.lua', siblings); siblings.hud = hud
 
--- Sibling-loaded modules (Rayfield ONLY UI)
-local hud           = loadWithSiblings('hud.lua', siblings);                      siblings.hud                  = hud
-local anti_afk      = loadWithSiblings('anti_afk.lua', siblings);                 siblings.anti_afk             = anti_afk
-local crates        = loadWithSiblings('crates.lua', siblings);                   siblings.crates               = crates
-local merchants     = loadWithSiblings('merchants.lua', siblings);                siblings.merchants            = merchants
-local farm          = loadWithSiblings('farm.lua', siblings);                     siblings.farm                 = farm
-local smart         = loadWithSiblings('smart_target.lua', siblings);             siblings.smart_target         = smart
-local redeem        = loadWithSiblings('redeem_unredeemed_codes.lua', siblings);  siblings.redeem_unredeemed_codes = redeem
-local fastlevel     = loadWithSiblings('fastlevel.lua', siblings);                siblings.fastlevel            = fastlevel
-local solo          = loadWithSiblings('solo.lua', siblings);                     siblings.solo                 = solo
-_G.TeleportToPrivateServer = solo
-local ui_rf         = loadWithSiblings('ui_rayfield.lua', siblings);              siblings.ui_rayfield          = ui_rf
+-- Load profile map and choose current profile
+local profiles = use('games.lua')
 
--- App
+local function currentProfile()
+  local pidKey = "place:"..tostring(game.PlaceId)
+  local uidKey = tostring(game.GameId)
+  return profiles[pidKey] or profiles[uidKey] or profiles.default
+end
+
+local PROFILE = currentProfile()
+
+-- Conditionally load feature modules
+local function want(name)
+  for _, n in ipairs(PROFILE.modules or {}) do if n == name then return true end end
+  return false
+end
+
+local anti_afk, farm, smart, merchants, crates, redeem_codes, fastlevel
+
+if want('anti_afk') then anti_afk = loadWithSiblings('anti_afk.lua', siblings); siblings.anti_afk = anti_afk end
+if want('farm')     then farm     = loadWithSiblings('farm.lua',     siblings); siblings.farm     = farm     end
+if want('smart_target') then smart= loadWithSiblings('smart_target.lua', siblings); siblings.smart_target = smart end
+if want('merchants')    then merchants = loadWithSiblings('merchants.lua', siblings); siblings.merchants = merchants end
+if want('crates')       then crates    = loadWithSiblings('crates.lua',    siblings); siblings.crates    = crates    end
+if want('redeem_unredeemed_codes') then
+  redeem_codes = loadWithSiblings('redeem_unredeemed_codes.lua', siblings); siblings.redeem_unredeemed_codes = redeem_codes
+end
+if want('fastlevel') then fastlevel = loadWithSiblings('fastlevel.lua', siblings); siblings.fastlevel = fastlevel end
+
+-- Rayfield UI (always loaded; it will render conditionally)
+local ui = loadWithSiblings('ui_rayfield.lua', siblings); siblings.ui = ui
+
+-- App wiring
 local app = loadWithSiblings('app.lua', siblings)
-app.start()
-utils.notify('🌲 WoodzHUB', 'Loaded successfully (Rayfield UI only).', 5)
+app.start(PROFILE)
+
+utils.notify('🌲 WoodzHUB', 'Loaded profile: '..(PROFILE.name or 'default'), 5)
