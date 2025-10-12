@@ -1,14 +1,12 @@
--- init.lua (hardened)
--- Fetch modules from GitHub, inject sibling loader (with lazy autoload),
--- preload app dependencies to prevent require(nil) inside app.lua,
--- support games.lua profiles and one-off "run" scripts.
+-- init.lua (robust lazy loader; no preload)
+-- Fetches modules from GitHub, injects a sibling table that behaves like a Folder,
+-- supports games.lua profiles, then boots app.lua (or a per-game runner).
 
--- 👉 Point BASE at your repo:
 local BASE = 'https://raw.githubusercontent.com/HiddenSquidHiding/TheHUB/main/'
 
-----------------------------------------------------------------------
--- Fetch + cached "use"
-----------------------------------------------------------------------
+-- -------------------------------------------------------------
+-- Fetch + simple cached "use(path)"
+-- -------------------------------------------------------------
 local function fetch(path)
   local ok, res = pcall(function() return game:HttpGet(BASE .. path) end)
   if not ok then error(('[init] Failed to fetch %s: %s'):format(path, tostring(res))) end
@@ -28,9 +26,9 @@ local function use(path)
   return mod
 end
 
-----------------------------------------------------------------------
--- Minimal utils (also exported on _G for sibling modules)
-----------------------------------------------------------------------
+-- -------------------------------------------------------------
+-- Minimal utils (also exported globally)
+-- -------------------------------------------------------------
 local utils = (function()
   local Players   = game:GetService('Players')
   local Workspace = game:GetService('Workspace')
@@ -48,7 +46,6 @@ local utils = (function()
     task.spawn(function() task.wait(duration or 5) ScreenGui:Destroy() end)
   end
   function M.waitForCharacter()
-    local Players = game:GetService('Players')
     local player = Players.LocalPlayer
     while not player.Character or not player.Character:FindFirstChild('HumanoidRootPart') or not player.Character:FindFirstChild('Humanoid') do
       player.CharacterAdded:Wait(); task.wait(0.1)
@@ -64,140 +61,128 @@ local utils = (function()
     if not model then return nil end
     local names={'HumanoidRootPart','PrimaryPart','Body','Hitbox','Root','Main'}
     for _,n in ipairs(names) do local part=model:FindFirstChild(n); if part and part:IsA('BasePart') then return part end end
-    for _,d in ipairs(Workspace:GetDescendants()) do if d:IsA('BasePart') then return d end end
+    for _,d in ipairs(model:GetDescendants()) do if d:IsA('BasePart') then return d end end
     return nil
-  end
-  function M.searchFoldersList()
-    local folders={Workspace}
-    for _,d in ipairs(Workspace:GetDescendants()) do if d:IsA('Folder') then table.insert(folders,d) end end
-    return folders
   end
   return M
 end)()
 
 _G.__WOODZ_UTILS = utils
 
-----------------------------------------------------------------------
--- Sibling loader with LAZY AUTOLOAD
-----------------------------------------------------------------------
+-- -------------------------------------------------------------
+-- Sibling table acting like script.Parent
+--   - lazy loads "<name>.lua" on first access
+--   - provides :FindFirstChild / :WaitForChild / :IsA to satisfy code that treats it like an Instance
+-- -------------------------------------------------------------
 local siblings = { _deps = { utils = utils } }
 
-local function loadWithSiblings(path, sibs)
-  sibs._deps = sibs._deps or {}
-  sibs._deps.utils = sibs._deps.utils or utils
+local function loadWithSiblings(path)
   local src = fetch(path)
   local chunk = loadstring(src, '='..path)
   assert(chunk, ('[loader] compile failed for %s'):format(path))
   local baseEnv = getfenv()
-  local fakeScript = { Parent = sibs }
+
   local function shimRequire(target)
     local tt = type(target)
     if tt == 'table' then
       return target
     elseif target == nil then
-      error(("[loader] require(nil) from %s — likely missing sibling (e.g. script.Parent.<module>)."):format(path))
+      error(("[loader] require(nil) from %s — missing sibling."):format(path))
     else
       return baseEnv.require(target)
     end
   end
-  local sandbox = setmetatable({ script = fakeScript, require = shimRequire }, { __index = baseEnv })
+
+  local sandbox = setmetatable({ script = { Parent = siblings }, require = shimRequire }, { __index = baseEnv })
   sandbox._G = _G
   setfenv(chunk, sandbox)
   return chunk()
 end
 
--- Lazy autoload: access siblings.<name> → load "<name>.lua" once
+local function lazyLoadKey(k)
+  local filename = tostring(k) .. ".lua"
+  local ok, mod = pcall(function() return loadWithSiblings(filename) end)
+  if ok then return mod end
+  return nil
+end
+
 setmetatable(siblings, {
   __index = function(t, k)
-    if k == nil or k == "_deps" then return rawget(t, k) end
-    local filename = tostring(k) .. ".lua"
-    local ok, mod = pcall(function() return loadWithSiblings(filename, siblings) end)
-    if ok and mod ~= nil then
+    -- Instance-like helpers
+    if k == 'FindFirstChild' then
+      return function(self, name) return rawget(self, name) end
+    elseif k == 'WaitForChild' then
+      return function(self, name, timeout)
+        local t0 = tick()
+        local v = rawget(self, name)
+        while not v do
+          if timeout and (tick()-t0) > timeout then return nil end
+          task.wait(0.05)
+          v = rawget(self, name)
+        end
+        return v
+      end
+    elseif k == 'IsA' then
+      return function(self, className) return className == 'Folder' or className == 'Instance' end
+    elseif k == '_deps' then
+      return rawget(t, k)
+    end
+    -- lazy sibling load
+    local mod = lazyLoadKey(k)
+    if mod ~= nil then
       rawset(t, k, mod)
       return mod
     end
-    -- If missing, return nil so require(nil) gives a helpful error from shim.
     return nil
   end
 })
 
-----------------------------------------------------------------------
--- Shared data tables
-----------------------------------------------------------------------
+-- -------------------------------------------------------------
+-- Shared data
+-- -------------------------------------------------------------
 local constants     = use('constants.lua')
 local data_monsters = use('data_monsters.lua')
 siblings.constants     = constants
 siblings.data_monsters = data_monsters
 
--- Preload HUD (common dependency for UI)
-local hud = loadWithSiblings('hud.lua', siblings)
-siblings.hud = hud
-
-----------------------------------------------------------------------
--- Profile selection
-----------------------------------------------------------------------
+-- -------------------------------------------------------------
+-- Profile selection (games.lua)
+-- -------------------------------------------------------------
 local function selectProfile()
-  local games = use('games.lua')  -- returns table
+  local gamesTbl = use('games.lua')
   local placeKey    = "place:" .. tostring(game.PlaceId)
   local universeKey = "universe:" .. tostring(game.GameId)
   local prof = nil
-  if type(games) == "table" then
-    prof = games[placeKey] or games[universeKey] or games[tostring(game.GameId)] or games.default
+  if type(gamesTbl) == "table" then
+    prof = gamesTbl[placeKey] or gamesTbl[universeKey] or gamesTbl[tostring(game.GameId)] or gamesTbl.default
   end
-  return prof, games
+  return prof, gamesTbl
 end
 
 local profile = selectProfile()
 
-----------------------------------------------------------------------
--- Safe preload so app.lua never sees nil siblings on require(script.Parent.X)
-----------------------------------------------------------------------
-local function preloadModules(list)
-  for _, name in ipairs(list) do
-    local file = name .. '.lua'
-    local ok, mod = pcall(function() return loadWithSiblings(file, siblings) end)
-    if ok and mod ~= nil then
-      siblings[name] = mod
-    else
-      warn(("[init] preload failed for %s: %s"):format(file, tostring(mod)))
-    end
-  end
-end
-
--- Always preload the standard set app.lua expects
-local ALWAYS_PRELOAD = {
-  'ui_rayfield','farm','merchants','crates','anti_afk',
-  'smart_target','redeem_unredeemed_codes','fastlevel'
-}
-
-----------------------------------------------------------------------
+-- -------------------------------------------------------------
 -- Boot
-----------------------------------------------------------------------
+-- -------------------------------------------------------------
 local function boot()
-  -- Also preload any profile-declared modules (optional)
-  if profile and type(profile) == "table" and type(profile.modules) == "table" then
-    preloadModules(profile.modules)
-  end
-  preloadModules(ALWAYS_PRELOAD)
-
-  -- If profile specifies a direct runner script, execute it and stop.
-  if profile and type(profile.run) == "string" and #profile.run > 0 then
+  -- If profile specifies a dedicated runner, run it and exit
+  if profile and type(profile) == "table" and type(profile.run) == "string" and #profile.run > 0 then
     local runnerPath = profile.run .. '.lua'
     local ok, err = pcall(function()
-      local mod = loadWithSiblings(runnerPath, siblings)
-      if type(mod) == "table" and type(mod.start) == "function" then
-        mod.start()
-      end
+      local mod = loadWithSiblings(runnerPath)
+      if type(mod) == "table" and type(mod.start) == "function" then mod.start() end
     end)
     if not ok then warn("[init] games.run failed: ", err) end
     return
   end
 
-  -- Otherwise run the main app
-  local app = loadWithSiblings('app.lua', siblings)
+  -- Normal app
+  local ok, app = pcall(function() return loadWithSiblings('app.lua') end)
+  if not ok or not app or not app.start then
+    error("[init] Failed to load app.lua (or .start missing)")
+  end
   app.start()
-  local name = (profile and profile.name) or "Default"
-  utils.notify('🌲 WoodzHUB', ('Loaded profile: %s'):format(name), 4)
+  utils.notify('🌲 WoodzHUB', ('Loaded profile: %s'):format((profile and profile.name) or "Default"), 4)
 end
 
 boot()
