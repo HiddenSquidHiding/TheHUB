@@ -1,5 +1,3 @@
-#-- app.lua — safe requires; will not call require(nil)
-
 local function getUtils()
   if rawget(getfenv(), "__WOODZ_UTILS") then return __WOODZ_UTILS end
   return {
