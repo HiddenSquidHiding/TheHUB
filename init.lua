@@ -1,18 +1,59 @@
--- init.lua (robust lazy loader; no preload)
--- Fetches modules from GitHub, injects a sibling table that behaves like a Folder,
--- supports games.lua profiles, then boots app.lua (or a per-game runner).
+-- init.lua — robust HTTP loader + safe boot
 
 local BASE = 'https://raw.githubusercontent.com/HiddenSquidHiding/TheHUB/main/'
 
--- -------------------------------------------------------------
--- Fetch + simple cached "use(path)"
--- -------------------------------------------------------------
 local function fetch(path)
   local ok, res = pcall(function() return game:HttpGet(BASE .. path) end)
   if not ok then error(('[init] Failed to fetch %s: %s'):format(path, tostring(res))) end
   return res
 end
 
+local function safeFetch(path)
+  local ok, res = pcall(function() return game:HttpGet(BASE .. path) end)
+  return ok and res or nil, ok and nil or res
+end
+
+-- tiny utils (for notify without relying on other modules)
+local function notify(title, msg, dur)
+  dur = dur or 4
+  pcall(function()
+    local Players = game:GetService('Players')
+    local player = Players.LocalPlayer
+    local PlayerGui = player and player:FindFirstChildOfClass('PlayerGui')
+    if not PlayerGui then return end
+    local ScreenGui = Instance.new('ScreenGui')
+    ScreenGui.ResetOnSpawn = false
+    ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+    ScreenGui.DisplayOrder = 2e9
+    ScreenGui.Parent = PlayerGui
+    local f = Instance.new('Frame')
+    f.Size = UDim2.new(0,300,0,90)
+    f.Position = UDim2.new(1,-310,0,10)
+    f.BackgroundColor3 = Color3.fromRGB(30,30,30)
+    f.Parent = ScreenGui
+    local t = Instance.new('TextLabel')
+    t.Size = UDim2.new(1,0,0,28)
+    t.BackgroundColor3 = Color3.fromRGB(50,50,50)
+    t.TextColor3 = Color3.new(1,1,1)
+    t.Font = Enum.Font.SourceSansBold
+    t.TextSize = 14
+    t.Text = title
+    t.Parent = f
+    local c = t:Clone()
+    c.BackgroundTransparency = 1
+    c.Size = UDim2.new(1,-10,0,54)
+    c.Position = UDim2.new(0,5,0,32)
+    c.Font = Enum.Font.SourceSans
+    c.TextSize = 14
+    c.TextWrapped = true
+    c.Text = msg
+    c.Parent = f
+    task.spawn(function() task.wait(dur); ScreenGui:Destroy() end)
+  end)
+  print(('[%s] %s'):format(title, msg))
+end
+
+-- cache + simple use()
 local CACHE = {}
 local function use(path)
   if CACHE[path] then return CACHE[path] end
@@ -26,163 +67,83 @@ local function use(path)
   return mod
 end
 
--- -------------------------------------------------------------
--- Minimal utils (also exported globally)
--- -------------------------------------------------------------
-local utils = (function()
-  local Players   = game:GetService('Players')
-  local Workspace = game:GetService('Workspace')
-  local M = { uiConnections = {} }
-  function M.track(conn) table.insert(M.uiConnections, conn) return conn end
-  function M.disconnectAll(list) for _, c in ipairs(list) do pcall(function() c:Disconnect() end) end; table.clear(list) end
-  function M.new(t, props, parent) local i=Instance.new(t); if props then for k,v in pairs(props) do i[k]=v end end; if parent then i.Parent=parent end; return i end
-  function M.notify(title, content, duration)
-    local player = Players.LocalPlayer
-    local PlayerGui = player:WaitForChild('PlayerGui')
-    local ScreenGui = M.new('ScreenGui', {ResetOnSpawn=false, ZIndexBehavior=Enum.ZIndexBehavior.Sibling, DisplayOrder=2e9}, PlayerGui)
-    local frame = M.new('Frame', {Size=UDim2.new(0,300,0,100), Position=UDim2.new(1,-310,0,10), BackgroundColor3=Color3.fromRGB(30,30,30)}, ScreenGui)
-    M.new('TextLabel', {Size=UDim2.new(1,0,0,30), BackgroundColor3=Color3.fromRGB(50,50,50), TextColor3=Color3.new(1,1,1), Text=title, TextSize=14, Font=Enum.Font.SourceSansBold}, frame)
-    M.new('TextLabel', {Size=UDim2.new(1,-10,0,60), Position=UDim2.new(0,5,0,35), BackgroundTransparency=1, TextColor3=Color3.new(1,1,1), Text=content, TextWrapped=true, TextSize=14, Font=Enum.Font.SourceSans}, frame)
-    task.spawn(function() task.wait(duration or 5) ScreenGui:Destroy() end)
-  end
-  function M.waitForCharacter()
-    local player = Players.LocalPlayer
-    while not player.Character or not player.Character:FindFirstChild('HumanoidRootPart') or not player.Character:FindFirstChild('Humanoid') do
-      player.CharacterAdded:Wait(); task.wait(0.1)
-    end
-    return player.Character
-  end
-  function M.isValidCFrame(cf)
-    if not cf then return false end
-    local p=cf.Position
-    return p.X==p.X and p.Y==p.Y and p.Z==p.Z and math.abs(p.X)<10000 and math.abs(p.Y)<10000 and math.abs(p.Z)<10000
-  end
-  function M.findBasePart(model)
-    if not model then return nil end
-    local names={'HumanoidRootPart','PrimaryPart','Body','Hitbox','Root','Main'}
-    for _,n in ipairs(names) do local part=model:FindFirstChild(n); if part and part:IsA('BasePart') then return part end end
-    for _,d in ipairs(model:GetDescendants()) do if d:IsA('BasePart') then return d end end
-    return nil
-  end
-  return M
-end)()
-
-_G.__WOODZ_UTILS = utils
-
--- -------------------------------------------------------------
--- Sibling table acting like script.Parent
---   - lazy loads "<name>.lua" on first access
---   - provides :FindFirstChild / :WaitForChild / :IsA to satisfy code that treats it like an Instance
--- -------------------------------------------------------------
-local siblings = { _deps = { utils = utils } }
-
-local function loadWithSiblings(path)
-  local src = fetch(path)
-  local chunk = loadstring(src, '='..path)
-  assert(chunk, ('[loader] compile failed for %s'):format(path))
+-- sibling-aware loader
+local siblings = { _deps = {} }
+local function loadWithSiblings(path, sibs)
+  sibs = sibs or siblings
+  local src, err = safeFetch(path)
+  if not src then return nil, err end
+  local chunk, loadErr = loadstring(src, '='..path)
+  if not chunk then return nil, loadErr or 'loadstring failed' end
   local baseEnv = getfenv()
-
+  local fakeScript = { Parent = sibs }
   local function shimRequire(target)
     local tt = type(target)
     if tt == 'table' then
-      return target
+      return target -- already a module table
     elseif target == nil then
-      error(("[loader] require(nil) from %s — missing sibling."):format(path))
+      error(("[loader] require(nil) from %s — missing sibling"):format(path))
     else
-      return baseEnv.require(target)
+      return baseEnv.require(target) -- normal ModuleScript instance path
     end
   end
-
-  local sandbox = setmetatable({ script = { Parent = siblings }, require = shimRequire }, { __index = baseEnv })
+  local sandbox = setmetatable({ script = fakeScript, require = shimRequire }, { __index = baseEnv })
   sandbox._G = _G
   setfenv(chunk, sandbox)
-  return chunk()
+  local ok, ret = pcall(chunk)
+  if not ok then return nil, ret end
+  return ret, nil
 end
 
-local function lazyLoadKey(k)
-  local filename = tostring(k) .. ".lua"
-  local ok, mod = pcall(function() return loadWithSiblings(filename) end)
-  if ok then return mod end
-  return nil
-end
-
-setmetatable(siblings, {
-  __index = function(t, k)
-    -- Instance-like helpers
-    if k == 'FindFirstChild' then
-      return function(self, name) return rawget(self, name) end
-    elseif k == 'WaitForChild' then
-      return function(self, name, timeout)
-        local t0 = tick()
-        local v = rawget(self, name)
-        while not v do
-          if timeout and (tick()-t0) > timeout then return nil end
-          task.wait(0.05)
-          v = rawget(self, name)
-        end
-        return v
-      end
-    elseif k == 'IsA' then
-      return function(self, className) return className == 'Folder' or className == 'Instance' end
-    elseif k == '_deps' then
-      return rawget(t, k)
+-- expose minimal utils for modules that look for it
+_G.__WOODZ_UTILS = {
+  notify = notify,
+  track = function(x) return x end,
+  disconnectAll = function() end,
+  new = function(t, props, parent) local i=Instance.new(t); if props then for k,v in pairs(props) do i[k]=v end end; if parent then i.Parent=parent end; return i end,
+  waitForCharacter = function()
+    local Players = game:GetService('Players')
+    local p = Players.LocalPlayer
+    while not p.Character or not p.Character:FindFirstChild('HumanoidRootPart') or not p.Character:FindFirstChildOfClass('Humanoid') do
+      p.CharacterAdded:Wait(); task.wait(0.05)
     end
-    -- lazy sibling load
-    local mod = lazyLoadKey(k)
-    if mod ~= nil then
-      rawset(t, k, mod)
-      return mod
-    end
-    return nil
-  end
-})
+    return p.Character
+  end,
+}
 
--- -------------------------------------------------------------
--- Shared data
--- -------------------------------------------------------------
-local constants     = use('constants.lua')
-local data_monsters = use('data_monsters.lua')
-siblings.constants     = constants
-siblings.data_monsters = data_monsters
-
--- -------------------------------------------------------------
--- Profile selection (games.lua)
--- -------------------------------------------------------------
-local function selectProfile()
-  local gamesTbl = use('games.lua')
-  local placeKey    = "place:" .. tostring(game.PlaceId)
-  local universeKey = "universe:" .. tostring(game.GameId)
-  local prof = nil
-  if type(gamesTbl) == "table" then
-    prof = gamesTbl[placeKey] or gamesTbl[universeKey] or gamesTbl[tostring(game.GameId)] or gamesTbl.default
+-- preload some common core (optional, non-fatal if missing)
+local function preload(name, filename)
+  local mod, err = loadWithSiblings(filename, siblings)
+  if mod then siblings[name] = mod else
+    print(("-- [init] preload skipped for %s: %s"):format(filename, tostring(err)))
   end
-  return prof, gamesTbl
 end
 
-local profile = selectProfile()
+-- try to bring these next to app.lua in the "siblings" table so script.Parent[...] works
+preload('constants',                 'constants.lua')
+preload('hud',                       'hud.lua')
+preload('ui_rayfield',               'ui_rayfield.lua')
+preload('farm',                      'farm.lua')
+preload('merchants',                 'merchants.lua')
+preload('crates',                    'crates.lua')
+preload('anti_afk',                  'anti_afk.lua')
+preload('smart_target',              'smart_target.lua')
+preload('redeem_unredeemed_codes',   'redeem_unredeemed_codes.lua')
+preload('fastlevel',                 'fastlevel.lua')
+preload('games',                     'games.lua')  -- optional
 
--- -------------------------------------------------------------
--- Boot
--- -------------------------------------------------------------
-local function boot()
-  -- If profile specifies a dedicated runner, run it and exit
-  if profile and type(profile) == "table" and type(profile.run) == "string" and #profile.run > 0 then
-    local runnerPath = profile.run .. '.lua'
-    local ok, err = pcall(function()
-      local mod = loadWithSiblings(runnerPath)
-      if type(mod) == "table" and type(mod.start) == "function" then mod.start() end
-    end)
-    if not ok then warn("[init] games.run failed: ", err) end
-    return
-  end
-
-  -- Normal app
-  local ok, app = pcall(function() return loadWithSiblings('app.lua') end)
-  if not ok or not app or not app.start then
-    error("[init] Failed to load app.lua (or .start missing)")
-  end
-  app.start()
-  utils.notify('🌲 WoodzHUB', ('Loaded profile: %s'):format((profile and profile.name) or "Default"), 4)
+-- finally, load app.lua with siblings available
+local app, appErr = loadWithSiblings('app.lua', siblings)
+if not app or type(app) ~= 'table' or type(app.start) ~= 'function' then
+  notify('🌲 WoodzHUB', '[init] Failed to load app.lua (or .start missing)', 6)
+  if appErr then warn(appErr) end
+  return
 end
 
-boot()
+local ok, runErr = pcall(function() app.start() end)
+if not ok then
+  notify('🌲 WoodzHUB', '[init] app.start crashed (see console).', 6)
+  warn(runErr)
+else
+  notify('🌲 WoodzHUB', 'Loaded successfully.', 3)
+end
