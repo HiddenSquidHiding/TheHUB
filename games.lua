@@ -1,9 +1,9 @@
 -- games.lua
--- Map universeId (tostring(game.GameId)) or placeId override -> profile
--- Each profile selects which modules to load and which Rayfield controls to show.
+-- Map universeId (tostring(game.GameId)) or place override "place:<PlaceId>" -> profile table.
+-- Must return a LUA TABLE (not JSON), and be a ModuleScript named exactly "games".
 
 return {
-  -- fallback
+  -- Fallback if no match
   default = {
     name = "Generic",
     modules = { "anti_afk" },
@@ -16,10 +16,8 @@ return {
     },
   },
 
-  --------------------------------------------------------------------
-  -- Brainrot Evolution (main experience) — replace this key if your
-  -- universeId differs. Use tostring(game.GameId) for universe keys.
-  --------------------------------------------------------------------
+  -- Main Brainrot Evolution (UNIVERSE / GameId)
+  -- Get this value by running:  print(game.GameId)  in the in-game console.
   ["place:111989938562194"] = {
     name = "Brainrot Evolution",
     modules = { "anti_afk","farm","smart_target","merchants","crates","redeem_unredeemed_codes","fastlevel" },
@@ -32,11 +30,7 @@ return {
     },
   },
 
-  --------------------------------------------------------------------
-  -- Brainrot Evolutions • Dungeons (PlaceId-specific route)
-  -- This profile boots a dedicated module that draws its own Rayfield UI,
-  -- so we don’t enable the generic hub controls here.
-  --------------------------------------------------------------------
+  -- Brainrot Evolution DUNGEON (place override)
   ["place:90608986169653"] = {
     name = "Brainrot Dungeon",
     modules = { "anti_afk","dungeon_be" },
@@ -45,7 +39,7 @@ return {
       autoFarm = false,     smartFarm = false,
       merchants = false,    crates = false, antiAFK = true,
       redeemCodes = false,  fastlevel = false, privateServer = false,
-      dungeon = true,       -- shows "Dungeon Auto-Attack" + "Play Again" toggles
+      dungeon = true,       -- shows Dungeon toggles in Rayfield
     },
   },
 }
