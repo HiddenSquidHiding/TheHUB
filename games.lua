@@ -3,15 +3,16 @@
 -- Each profile selects which modules to load and which Rayfield controls to show.
 
 return {
-  -- Fallback if no exact match
+  -- fallback
   default = {
     name = "Generic",
-    modules = { "anti_afk" }, -- keep it light by default
+    modules = { "anti_afk" },
     ui = {
-      modelPicker   = false, currentTarget = false,
-      autoFarm      = false, smartFarm     = false,
-      merchants     = false, crates        = false, antiAFK = true,
-      redeemCodes   = false, fastlevel     = false, privateServer = false,
+      modelPicker = false, currentTarget = false,
+      autoFarm = false, smartFarm = false,
+      merchants = false, crates = false, antiAFK = true,
+      redeemCodes = false, fastlevel = false, privateServer = false,
+      dungeon = false,
     },
   },
 
@@ -21,15 +22,13 @@ return {
   --------------------------------------------------------------------
   ["place:111989938562194"] = {
     name = "Brainrot Evolution",
-    modules = {
-      "anti_afk","farm","smart_target","merchants","crates",
-      "redeem_unredeemed_codes","fastlevel"
-    },
+    modules = { "anti_afk","farm","smart_target","merchants","crates","redeem_unredeemed_codes","fastlevel" },
     ui = {
-      modelPicker   = true,  currentTarget = true,
-      autoFarm      = true,  smartFarm     = true,
-      merchants     = true,  crates        = true,  antiAFK = true,
-      redeemCodes   = true,  fastlevel     = true,  privateServer = true,
+      modelPicker = true,   currentTarget = true,
+      autoFarm = true,      smartFarm = true,
+      merchants = true,     crates = true,  antiAFK = true,
+      redeemCodes = true,   fastlevel = true, privateServer = true,
+      dungeon = false,
     },
   },
 
@@ -39,14 +38,14 @@ return {
   -- so we don’t enable the generic hub controls here.
   --------------------------------------------------------------------
   ["place:90608986169653"] = {
-    name    = "Brainrot Dungeons",
-    modules = { },              -- let the dungeon module own its logic/UI
-    run     = "brainrot_dungeon_rayfield", -- << require(this ModuleScript) if present
-    ui      = {
-      modelPicker   = false, currentTarget = false,
-      autoFarm      = false, smartFarm     = false,
-      merchants     = false, crates        = false, antiAFK = false,
-      redeemCodes   = false, fastlevel     = false, privateServer = false,
+    name = "Brainrot Dungeon",
+    modules = { "anti_afk","dungeon_be" },
+    ui = {
+      modelPicker = false,  currentTarget = false,
+      autoFarm = false,     smartFarm = false,
+      merchants = false,    crates = false, antiAFK = true,
+      redeemCodes = false,  fastlevel = false, privateServer = false,
+      dungeon = true,       -- shows "Dungeon Auto-Attack" + "Play Again" toggles
     },
   },
 }
