@@ -1,6 +1,14 @@
 -- app.lua — executor/table-sibling safe bootstrap (no top-level require)
 -- Exposes start() for your init.lua to call.
 
+do
+  local gid  = tostring(game.GameId)
+  local pid  = tostring(game.PlaceId)
+  print(("[WoodzHUB] universeId (game.GameId): %s"):format(gid))
+  print(("[WoodzHUB] placeId (game.PlaceId):   %s"):format(pid))
+  print(("[WoodzHUB] games.lua keys to support: '%s' and 'place:%s'"):format(gid, pid))
+end
+
 -- Double-boot guard
 if _G.__WOODZHUB_BOOTED == nil then _G.__WOODZHUB_BOOTED = false end
 
