@@ -6,7 +6,9 @@
 ----------------------------------------------------------------------
 local function getUtils()
   local p = script and script.Parent
-  if p and p._deps and p._deps.utils then return p._deps.utils end
+  if p and typeof(p) == "Instance" and p:FindFirstChild("_deps") and p._deps:FindFirstChild("utils") then
+    return require(p._deps.utils)
+  end
   if rawget(getfenv(), "__WOODZ_UTILS") then return __WOODZ_UTILS end
   return {
     notify = function(_,_) end,
@@ -23,11 +25,26 @@ end
 local utils = getUtils()
 
 ----------------------------------------------------------------------
--- 2) Safe sibling require helpers
+-- 2) Safe sibling require helpers (Instance or table registry)
 ----------------------------------------------------------------------
+local function siblingsRegistry()
+  -- if your loader registered a virtual sibling map, use it
+  local reg = rawget(getfenv(), "__WOODZ_SIBLINGS")
+  return (type(reg) == "table") and reg or nil
+end
+
 local function findSibling(name)
-  local p = script and script.Parent
-  return (p and p:FindFirstChild(name)) or nil
+  -- prefer real Instances
+  local p = script and rawget(script, "Parent")
+  if typeof(p) == "Instance" then
+    return p:FindFirstChild(name)
+  end
+  -- fallback: table registry the loader might have created
+  local reg = siblingsRegistry()
+  if reg and reg[name] then
+    return reg[name]
+  end
+  return nil
 end
 
 local function tryRequireSibling(name, required)
@@ -78,7 +95,6 @@ local function chooseProfile(games)
   local profile  = games[placeKey] or games[gameKey] or games.default
 
   if not profile then
-    -- Extreme fallback
     profile = {
       name = "Fallback",
       modules = { "anti_afk" },
@@ -138,7 +154,6 @@ local function boot()
 
   if uiRF then
     RF = uiRF.build({
-      -- Model picker & labels are handled inside ui_rayfield (it calls farm.*)
       onAutoFarmToggle = (uiFlags.autoFarm and loaded.farm) and function(v)
         if suppress then return end
         local farm = loaded.farm
@@ -150,10 +165,6 @@ local function boot()
             end)
           end)
         else
-          -- runAutoFarm loop exits when its checked flag returns false; here we can’t flip it directly
-          -- because that loop uses the closure you pass. Your farm.lua already supports a flagGetter,
-          -- so if you want global control store the flag in a shared module or farm itself.
-          -- Keeping it simple: refreshing UI label.
           if RF and RF.setCurrentTarget then pcall(function() RF.setCurrentTarget("Current Target: None") end) end
         end
       end or nil,
@@ -162,7 +173,6 @@ local function boot()
         if suppress then return end
         local smart = loaded.smart_target
         if v then
-          -- Try to find MonsterInfo automatically (your smart_target does this if you pass opts.module)
           local RS = game:GetService("ReplicatedStorage")
           local function resolveMonsterInfo()
             local candidates = {
