@@ -1,160 +1,102 @@
+-- init.lua (Rayfield-only boot, no HUD)
 local BASE = 'https://raw.githubusercontent.com/HiddenSquidHiding/TheHUB/main/'
 
-local function httpget(path)
-  return game:HttpGet(BASE .. path)
-end
-
 local function fetch(path)
-  local ok, res = pcall(function() return httpget(path) end)
+  local ok, res = pcall(function() return game:HttpGet(BASE .. path) end)
   if not ok then error(('[init] Failed to fetch %s: %s'):format(path, tostring(res))) end
   return res
 end
 
-local function safeFetch(path)
-  local ok, res = pcall(function() return httpget(path) end)
-  return ok and res or nil, ok and nil or res
-end
-
--- minimal utils so modules can run during preload
-local function notify(title, msg, dur)
-  dur = dur or 4
-  print(('[%s] %s'):format(title, msg))
-  pcall(function()
-    local Players = game:GetService('Players')
+-- tiny utils (exposed globally so sibling modules can find it)
+local utils = (function()
+  local Players = game:GetService('Players')
+  local M = { uiConnections = {} }
+  function M.track(conn) table.insert(M.uiConnections, conn); return conn end
+  function M.disconnectAll(list) for _,c in ipairs(list) do pcall(function() c:Disconnect() end) end; table.clear(list) end
+  function M.new(t, props, parent) local i=Instance.new(t); if props then for k,v in pairs(props) do i[k]=v end end; if parent then i.Parent=parent end; return i end
+  function M.notify(title, content, duration)
     local player = Players.LocalPlayer
-    local pg = player and player:FindFirstChildOfClass('PlayerGui')
-    if not pg then return end
-    local gui = Instance.new('ScreenGui')
-    gui.ResetOnSpawn = false
-    gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-    gui.DisplayOrder = 2e9
-    gui.Parent = pg
-    local f = Instance.new('Frame')
-    f.BackgroundColor3 = Color3.fromRGB(30,30,30)
-    f.Size = UDim2.new(0,300,0,90)
-    f.Position = UDim2.new(1,-310,0,10)
-    f.Parent = gui
-    local t = Instance.new('TextLabel')
-    t.BackgroundColor3 = Color3.fromRGB(50,50,50)
-    t.TextColor3 = Color3.new(1,1,1)
-    t.Font = Enum.Font.SourceSansBold
-    t.TextSize = 14
-    t.Text = title
-    t.Size = UDim2.new(1,0,0,28)
-    t.Parent = f
-    local c = t:Clone()
-    c.BackgroundTransparency = 1
-    c.Font = Enum.Font.SourceSans
-    c.TextWrapped = true
-    c.Text = msg
-    c.Size = UDim2.new(1,-10,0,54)
-    c.Position = UDim2.new(0,5,0,32)
-    c.Parent = f
-    task.spawn(function() task.wait(dur); gui:Destroy() end)
-  end)
-end
-
-_G.__WOODZ_UTILS = {
-  notify = notify,
-  track = function(x) return x end,
-  disconnectAll = function() end,
-  new = function(t, props, parent)
-    local i=Instance.new(t)
-    if props then for k,v in pairs(props) do i[k]=v end end
-    if parent then i.Parent=parent end
-    return i
-  end,
-  waitForCharacter = function()
-    local Players = game:GetService('Players')
-    local p = Players.LocalPlayer
-    while not p.Character
-      or not p.Character:FindFirstChild('HumanoidRootPart')
-      or not p.Character:FindFirstChildOfClass('Humanoid') do
-      p.CharacterAdded:Wait(); task.wait(0.05)
+    local pg = player:FindFirstChildOfClass('PlayerGui') or player:WaitForChild('PlayerGui')
+    local sg = M.new('ScreenGui',{ResetOnSpawn=false,ZIndexBehavior=Enum.ZIndexBehavior.Sibling,DisplayOrder=2e9},pg)
+    local f = M.new('Frame',{Size=UDim2.new(0,300,0,100),Position=UDim2.new(1,-310,0,10),BackgroundColor3=Color3.fromRGB(30,30,30)},sg)
+    M.new('TextLabel',{Size=UDim2.new(1,0,0,30),BackgroundColor3=Color3.fromRGB(50,50,50),TextColor3=Color3.new(1,1,1),Text=title,TextSize=14,Font=Enum.Font.SourceSansBold},f)
+    M.new('TextLabel',{Size=UDim2.new(1,-10,0,60),Position=UDim2.new(0,5,0,35),BackgroundTransparency=1,TextColor3=Color3.new(1,1,1),Text=content,TextWrapped=true,TextSize=14,Font=Enum.Font.SourceSans},f)
+    task.spawn(function() task.wait(duration or 3); sg:Destroy() end)
+  end
+  function M.waitForCharacter()
+    local p = game:GetService('Players').LocalPlayer
+    while not p.Character or not p.Character:FindFirstChild('HumanoidRootPart') or not p.Character:FindFirstChild('Humanoid') do
+      p.CharacterAdded:Wait(); task.wait(0.1)
     end
     return p.Character
-  end,
-}
+  end
+  return M
+end)()
+_G.__WOODZ_UTILS = utils
 
--- shared siblings table used as script.Parent for every module
-local siblings = {
-  _deps = { utils = __WOODZ_UTILS }, -- <-- IMPORTANT: inject utils here
-}
-
--- helper: detect obvious non-Lua content (HTML/Markdown/JSON error)
-local function looksNonLua(s)
-  if not s or #s == 0 then return true end
-  -- common first chars for non-lua: '<' (HTML), '{' (JSON error), '#' (markdown)
-  local first = s:sub(1,1)
-  if first == '<' or first == '{' or first == '#' then return true end
-  -- also catch GitHub 404 JSON
-  if s:find('"Not Found"') or s:find('<!DOCTYPE') then return true end
-  return false
+-- simple module cache loader (for stand-alone files)
+local CACHE = {}
+local function use(path)
+  if CACHE[path] then return CACHE[path] end
+  local src = fetch(path)
+  local chunk = loadstring(src, '='..path); assert(chunk, 'Bad chunk for '..path)
+  local env = setmetatable({}, { __index = getfenv() })
+  setfenv(chunk, env)
+  local mod = chunk()
+  CACHE[path] = mod
+  return mod
 end
 
+-- sibling-aware loader (so script.Parent.* works)
 local function loadWithSiblings(path, sibs)
-  sibs = sibs or siblings
-  local src, err = safeFetch(path)
-  if not src then return nil, err end
-  if looksNonLua(src) then
-    return nil, ('%s does not look like Lua (got non-Lua/404/markdown). Check your BASE URL or file path.'):format(path)
-  end
-  local chunk, loadErr = loadstring(src, '='..path)
-  if not chunk then return nil, loadErr or 'loadstring failed' end
+  sibs = sibs or {}
+  sibs._deps = sibs._deps or {}
+  sibs._deps.utils = sibs._deps.utils or utils
+
+  local src = fetch(path)
+  local chunk = loadstring(src, '='..path); assert(chunk)
   local baseEnv = getfenv()
   local fakeScript = { Parent = sibs }
   local function shimRequire(target)
-    local tt = type(target)
-    if tt == 'table' then
-      return target
-    elseif target == nil then
-      error(("[loader] require(nil) from %s — missing sibling"):format(path))
-    else
-      return baseEnv.require(target)
+    if type(target) == 'table' then return target end
+    if target == nil then
+      error(("[loader] require(nil) from %s — missing sibling."):format(path))
     end
+    return baseEnv.require(target)
   end
-  local sandbox = setmetatable({ script = fakeScript, require = shimRequire }, { __index = baseEnv })
+  local sandbox = setmetatable({ script=fakeScript, require=shimRequire }, { __index = baseEnv })
   sandbox._G = _G
+  sandbox.__WOODZ_UTILS = _G.__WOODZ_UTILS
   setfenv(chunk, sandbox)
-  local ok, ret = pcall(chunk)
-  if not ok then return nil, ret end
-  return ret, nil
+  return chunk()
 end
 
-local function preload(name, filename)
-  local mod, err = loadWithSiblings(filename, siblings)
-  if mod then
-    siblings[name] = mod
-  else
-    print(("-- [init] preload skipped for %s: %s"):format(filename, tostring(err)))
-  end
-end
+-- core data
+local constants     = use('constants.lua')
+local data_monsters = use('data_monsters.lua')
 
--- try to preload these; missing ones won’t crash
-preload('constants',                 'constants.lua')
-preload('hud',                       'hud.lua')
-preload('ui_rayfield',               'ui_rayfield.lua')
-preload('farm',                      'farm.lua')
-preload('merchants',                 'merchants.lua')
-preload('crates',                    'crates.lua')
-preload('anti_afk',                  'anti_afk.lua')
-preload('smart_target',              'smart_target.lua')
-preload('redeem_unredeemed_codes',   'redeem_unredeemed_codes.lua')
-preload('fastlevel',                 'fastlevel.lua')
-preload('games',                     'games.lua')
+-- siblings table (NO HUD)
+local siblings = { _deps = { utils = utils }, constants = constants, data_monsters = data_monsters }
 
--- finally, load app.lua
-local app, appErr = loadWithSiblings('app.lua', siblings)
-if not app or type(app) ~= 'table' or type(app.start) ~= 'function' then
-  notify('🌲 WoodzHUB', '[init] Failed to load app.lua (or .start missing)', 6)
-  if appErr then warn(appErr) end
-  return
-end
+-- load feature modules (no hud)
+local anti_afk   = loadWithSiblings('anti_afk.lua', siblings); siblings.anti_afk = anti_afk
+local crates     = loadWithSiblings('crates.lua', siblings);   siblings.crates   = crates
+local merchants  = loadWithSiblings('merchants.lua', siblings);siblings.merchants= merchants
+local farm       = loadWithSiblings('farm.lua', siblings);     siblings.farm     = farm
+local smart      = loadWithSiblings('smart_target.lua', siblings); siblings.smart_target = smart
+local ui_rf      = loadWithSiblings('ui_rayfield.lua', siblings);   siblings.ui_rayfield = ui_rf
+local redeem     = loadWithSiblings('redeem_unredeemed_codes.lua', siblings); siblings.redeem_unredeemed_codes = redeem
+local fastlevel  = loadWithSiblings('fastlevel.lua', siblings); siblings.fastlevel = fastlevel
 
-local ok, runErr = pcall(function() app.start() end)
-if not ok then
-  notify('🌲 WoodzHUB', '[init] app.start crashed (see console).', 6)
-  warn(runErr)
+-- app (expects Rayfield)
+local app        = loadWithSiblings('app.lua', siblings)
+if app and app.start then
+  task.spawn(function()
+    local ok, err = pcall(app.start)
+    if not ok then warn('[WoodzHUB] app.start error: ', err) end
+  end)
 else
-  notify('🌲 WoodzHUB', 'Loaded successfully.', 3)
+  warn('[WoodzHUB] app.lua missing start()')
 end
+
+utils.notify('🌲 WoodzHUB', 'Loaded without HUD.', 3)
