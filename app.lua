@@ -1,19 +1,21 @@
 -- app.lua — Executor-friendly bootstrapper for WoodzHUB
--- - Remote-loads modules from GitHub raw if local require fails
+-- - Remote-loads modules from GitHub raw if local require is not applicable
 -- - Selects a profile from games.lua by place:PlaceId -> GameId -> default
 -- - Wires Rayfield UI (ui_rayfield.lua) to modules (farm, anti_afk, crates, merchants, smart_target, redeem codes, fastlevel)
+-- - Exports app.start() for compatibility with loaders expecting a start() entrypoint
+-- - Prevents double-boot/UI duplication
 
 ----------------------------------------------------------------------
--- Safety: prevent double boot
+-- Single-run guard (covers both direct exec and module-style start())
 ----------------------------------------------------------------------
 if _G.WOODZHUB_APP_RUNNING then
   warn("[app.lua] already running; skipping second boot")
-  return
+  return { start = function() end } -- satisfy any start() caller gracefully
 end
 _G.WOODZHUB_APP_RUNNING = true
 
 ----------------------------------------------------------------------
--- Minimal utils (available to all modules via __WOODZ_UTILS)
+-- Minimal utils (shared to modules via __WOODZ_UTILS)
 ----------------------------------------------------------------------
 local Players           = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -22,7 +24,6 @@ local utils = {
   notify = function(title, msg, dur)
     dur = dur or 3
     print(("[%s] %s"):format(title, msg))
-    -- If you have your own notification system, call it here
   end,
   waitForCharacter = function()
     local plr = Players.LocalPlayer
@@ -35,7 +36,7 @@ local utils = {
       task.wait()
     end
   end,
-  track = function(conn) return conn end, -- no-op holder; some modules call utils.track
+  track = function(conn) return conn end,
   new = function(t, props, parent)
     local i = Instance.new(t)
     if props then for k,v in pairs(props) do i[k] = v end end
@@ -43,15 +44,12 @@ local utils = {
     return i
   end,
 }
-
--- expose utils for modules that look for this
 _G.__WOODZ_UTILS = utils
 
 ----------------------------------------------------------------------
--- GitHub remote loader
---   Adjust BASE to your repository's raw path.
+-- GitHub remote loader (adjust BASE to your repo)
 ----------------------------------------------------------------------
-local BASE = 'https://raw.githubusercontent.com/HiddenSquidHiding/TheHUB/main/'  -- <-- change if needed
+local BASE = 'https://raw.githubusercontent.com/HiddenSquidHiding/TheHUB/main/' -- <-- change if needed
 
 local function fetchSource(path)
   local ok, src = pcall(function() return game:HttpGet(BASE .. path) end)
@@ -63,7 +61,7 @@ local function fetchSource(path)
 end
 
 ----------------------------------------------------------------------
--- Shim require: prefetch siblings, then load with a shared environment
+-- Shim require with sibling prefetch + shared environment
 ----------------------------------------------------------------------
 local function preload(paths)
   local got = {}
@@ -79,7 +77,7 @@ local function preload(paths)
   return got
 end
 
--- Files we *may* need. Missing ones are OK; we handle gracefully.
+-- Preload modules we may need (missing is OK)
 local fetched = preload({
   "games.lua",
   "ui_rayfield.lua",
@@ -94,13 +92,11 @@ local fetched = preload({
   "hud.lua",
 })
 
--- compile cache (so modules are singletons)
+-- compiled cache so modules are singletons
 local compiled = {}
 
 local function loadWithSiblings(entryName)
-  -- entryName is a filename like "games.lua" or logical name like "farm.lua"
-  local filename = entryName
-  if not filename:match("%.lua$") then filename = entryName .. ".lua" end
+  local filename = entryName:match("%.lua$") and entryName or (entryName .. ".lua")
   if compiled[filename] ~= nil then return compiled[filename] end
 
   local src = fetched[filename]
@@ -110,24 +106,15 @@ local function loadWithSiblings(entryName)
     return nil
   end
 
-  -- Build a sibling table from everything we fetched
   local siblingNames = {}
-  for k,_ in pairs(fetched) do
-    local name = k:gsub("%.lua$","")
-    siblingNames[name] = true
-  end
+  for k,_ in pairs(fetched) do siblingNames[k:gsub("%.lua$","")] = true end
 
   local env = getfenv()
-  local parent = {} -- fake "script.Parent"
-  for name,_ in pairs(siblingNames) do
-    parent[name] = { Name = name } -- so require(script.Parent.constants) works
-  end
+  local parent = {}
+  for name,_ in pairs(siblingNames) do parent[name] = { Name = name } end
 
   local function shimRequire(mod)
-    -- accept string or fake ModuleScript {Name="foo"}
-    if type(mod) == "table" and mod.Name then
-      mod = tostring(mod.Name)
-    end
+    if type(mod) == "table" and mod.Name then mod = tostring(mod.Name) end
     if type(mod) ~= "string" then
       error("[loader] require(nil) from " .. tostring(entryName) .. " — likely missing sibling", 2)
     end
@@ -143,7 +130,6 @@ local function loadWithSiblings(entryName)
     return nil
   end
 
-  -- Inject sandbox
   local sandbox = setmetatable({
     __WOODZ_UTILS = _G.__WOODZ_UTILS,
     script = { Parent = parent },
@@ -164,39 +150,27 @@ local function loadWithSiblings(entryName)
 end
 
 ----------------------------------------------------------------------
--- Load games.lua and select profile
+-- games.lua -> profile selection (place -> game -> default)
 ----------------------------------------------------------------------
 local function loadGamesConfig()
   local games = loadWithSiblings("games.lua")
   if type(games) ~= "table" then
     warn("[app.lua] games.lua missing or invalid; falling back to default")
     games = {
-      default = {
-        name = "Generic",
-        modules = {},
-        ui = {},
-      }
+      default = { name = "Generic", modules = {}, ui = {} }
     }
-  end
-
-  -- Debug list keys
-  do
-    local keys = {}
-    for k,_ in pairs(games) do table.insert(keys, tostring(k)) end
-    table.sort(keys)
-    print("[app.lua] games.lua keys: " .. table.concat(keys, ", "))
   end
 
   local gid = tostring(game.GameId)
   local pid = tostring(game.PlaceId)
   local placeKey = "place:" .. pid
 
-  local key, profile =
-    games[placeKey] and placeKey
-    or games[gid] and gid
-    or "default"
+  local key =
+      (games[placeKey] and placeKey)
+      or (games[gid] and gid)
+      or "default"
 
-  profile = games[key] or games.default or { name="Generic", modules={}, ui={} }
+  local profile = games[key] or games.default or { name="Generic", modules={}, ui={} }
   profile.name = profile.name or "Unnamed"
   profile.modules = profile.modules or {}
   profile.ui = profile.ui or {}
@@ -205,9 +179,6 @@ local function loadGamesConfig()
   return profile
 end
 
-----------------------------------------------------------------------
--- Optional loader helper (returns module table or nil)
-----------------------------------------------------------------------
 local function opt(name)
   local mod = loadWithSiblings(name)
   if mod == nil then
@@ -217,12 +188,11 @@ local function opt(name)
 end
 
 ----------------------------------------------------------------------
--- Boot
+-- Boot logic (idempotent via global guard)
 ----------------------------------------------------------------------
 local function boot()
   utils.notify("🌲 WoodzHUB", "Booting…", 2)
 
-  -- profile
   local profile = loadGamesConfig()
 
   -- Modules (may be nil if missing)
@@ -245,7 +215,7 @@ local function boot()
   local autoOpenCratesEnabled  = false
   local antiAfkEnabled         = false
 
-  -- Rayfield handle (if UI module loads)
+  -- Rayfield handle
   local RF = nil
   local suppressRF = false
   local function rfSet(fn)
@@ -256,7 +226,7 @@ local function boot()
     end
   end
 
-  -- Throttled status label
+  -- status label (throttled)
   local lastLabelText, lastLabelAt = nil, 0
   local function setCurrentTarget(text)
     text = text or "Current Target: None"
@@ -266,240 +236,230 @@ local function boot()
     if RF and RF.setCurrentTarget then pcall(function() RF.setCurrentTarget(text) end) end
   end
 
-  -- Small notify helper
   local function notifyToggle(name, on, extra)
     extra = extra or ""
     local msg = on and (name .. " enabled" .. extra) or (name .. " disabled")
     utils.notify("🌲 " .. name, msg, 3.5)
   end
 
-  -- If Rayfield UI is available, build it and wire handlers
+  -- Build Rayfield (pass profile.ui so your UI module can decide what to show)
   if uiRF and type(uiRF.build) == "function" then
-    RF = uiRF.build({
-      -- Clear All (below model picker)
-      onClearAll = function()
-        if not farm then return end
-        farm.setSelected({})
-        if RF and RF.syncModelSelection then RF.syncModelSelection() end
-        utils.notify("🌲 Preset", "Cleared all selections.", 3)
-      end,
+    -- prevent double window if some external loader calls us twice
+    if _G.WOODZHUB_UI_BUILT then
+      warn("[app.lua] UI already built — skipping duplicate")
+    else
+      _G.WOODZHUB_UI_BUILT = true
+      print("-- creating window")
+      RF = uiRF.build({
+        onClearAll = function()
+          if not farm then return end
+          farm.setSelected({})
+          if RF and RF.syncModelSelection then RF.syncModelSelection() end
+          utils.notify("🌲 Preset", "Cleared all selections.", 3)
+        end,
 
-      -- Auto-Farm (exclusive with Smart Farm)
-      onAutoFarmToggle = function(v)
-        if not farm then return end
-        if suppressRF then return end
-        local newState = (v ~= nil) and v or (not autoFarmEnabled)
+        onAutoFarmToggle = function(v)
+          if not farm then return end
+          if suppressRF then return end
+          local newState = (v ~= nil) and v or (not autoFarmEnabled)
 
-        if newState and smartFarmEnabled then
-          smartFarmEnabled = false
-          rfSet(function() if RF.setSmartFarm then RF.setSmartFarm(false) end end)
-          notifyToggle("Smart Farm", false)
-        end
-
-        autoFarmEnabled = newState
-
-        if autoFarmEnabled then
-          if farm.setupAutoAttackRemote then farm.setupAutoAttackRemote() end
-          local sel = farm.getSelected and farm.getSelected() or {}
-          local extra = (#sel > 0) and (" for: " .. table.concat(sel, ", ")) or ""
-          notifyToggle("Auto-Farm", true, extra)
-
-          task.spawn(function()
-            farm.runAutoFarm(
-              function() return autoFarmEnabled end,
-              setCurrentTarget
-            )
-          end)
-        else
-          setCurrentTarget("Current Target: None")
-          notifyToggle("Auto-Farm", false)
-        end
-      end,
-
-      -- Smart Farm (exclusive with Auto-Farm)
-      onSmartFarmToggle = function(v)
-        if not smartFarm or not farm then return end
-        if suppressRF then return end
-        local newState = (v ~= nil) and v or (not smartFarmEnabled)
-
-        if newState and autoFarmEnabled then
-          autoFarmEnabled = false
-          rfSet(function() if RF.setAutoFarm then RF.setAutoFarm(false) end end)
-          notifyToggle("Auto-Farm", false)
-        end
-
-        smartFarmEnabled = newState
-
-        if smartFarmEnabled then
-          local function resolveMonsterInfo()
-            local RS = ReplicatedStorage
-            local paths = {
-              {"GameInfo","MonsterInfo"},{"MonsterInfo"},{"Shared","MonsterInfo"},
-              {"Modules","MonsterInfo"},{"Configs","MonsterInfo"},
-            }
-            for _, path in ipairs(paths) do
-              local node, ok = RS, true
-              for _, nm in ipairs(path) do
-                node = node:FindFirstChild(nm)
-                if not node then ok=false break end
-              end
-              if ok and node and node:IsA("ModuleScript") then return node end
-            end
-            for _, d in ipairs(RS:GetDescendants()) do
-              if d:IsA("ModuleScript") and d.Name=="MonsterInfo" then return d end
-            end
-            return nil
-          end
-
-          local module = resolveMonsterInfo()
-          notifyToggle("Smart Farm", true, module and (" — using " .. module:GetFullName()) or " (MonsterInfo not found; will stop)")
-          if module then
-            task.spawn(function()
-              smartFarm.runSmartFarm(
-                function() return smartFarmEnabled end,
-                setCurrentTarget,
-                { module = module, safetyBuffer = 0.8, refreshInterval = 0.05 }
-              )
-            end)
-          else
-            smartFarmEnabled = false
-            rfSet(function() if RF.setSmartFarm then RF.setSmartFarm(false) end end)
-          end
-        else
-          setCurrentTarget("Current Target: None")
-          notifyToggle("Smart Farm", false)
-        end
-      end,
-
-      -- Merchants
-      onToggleMerchant1 = function(v)
-        if not merchants then return end
-        if suppressRF then return end
-        autoBuyM1Enabled = (v ~= nil) and v or (not autoBuyM1Enabled)
-        if autoBuyM1Enabled then
-          notifyToggle("Merchant — Chicleteiramania", true)
-          task.spawn(function()
-            merchants.autoBuyLoop(
-              "SmelterMerchantService",
-              function() return autoBuyM1Enabled end,
-              function(_) end
-            )
-          end)
-        else
-          notifyToggle("Merchant — Chicleteiramania", false)
-        end
-      end,
-
-      onToggleMerchant2 = function(v)
-        if not merchants then return end
-        if suppressRF then return end
-        autoBuyM2Enabled = (v ~= nil) and v or (not autoBuyM2Enabled)
-        if autoBuyM2Enabled then
-          notifyToggle("Merchant — Bombardino Sewer", true)
-          task.spawn(function()
-            merchants.autoBuyLoop(
-              "SmelterMerchantService2",
-              function() return autoBuyM2Enabled end,
-              function(_) end
-            )
-          end)
-        else
-          notifyToggle("Merchant — Bombardino Sewer", false)
-        end
-      end,
-
-      -- Crates
-      onToggleCrates = function(v)
-        if not crates then return end
-        if suppressRF then return end
-        autoOpenCratesEnabled = (v ~= nil) and v or (not autoOpenCratesEnabled)
-        if autoOpenCratesEnabled then
-          if crates.refreshCrateInventory then crates.refreshCrateInventory(true) end
-          local delayText = (compiled["constants.lua"] and (opt("constants").crateOpenDelay or 1)) or 1
-          notifyToggle("Crates", true, " (1 every " .. tostring(delayText) .. "s)")
-          task.spawn(function()
-            crates.autoOpenCratesEnabledLoop(function() return autoOpenCratesEnabled end)
-          end)
-        else
-          notifyToggle("Crates", false)
-        end
-      end,
-
-      -- Anti-AFK
-      onToggleAntiAFK = function(v)
-        if not antiAFK then return end
-        if suppressRF then return end
-        antiAfkEnabled = (v ~= nil) and v or (not antiAfkEnabled)
-        if antiAfkEnabled then antiAFK.enable() else antiAFK.disable() end
-        notifyToggle("Anti-AFK", antiAfkEnabled)
-      end,
-
-      -- Redeem Codes
-      onRedeemCodes = function()
-        if not redeemCodes then return end
-        task.spawn(function()
-          local ok, err = pcall(function()
-            redeemCodes.run({ dryRun = false, concurrent = true, delayBetween = 0.25 })
-          end)
-          if not ok then utils.notify("Codes", "Redeem failed: " .. tostring(err), 4) end
-        end)
-      end,
-
-      -- Instant Level 70+ (Sahur only)
-      onFastLevelToggle = function(v)
-        if not (fastlevel and farm) then return end
-        if suppressRF then return end
-        local newState = (v ~= nil) and v or (not (fastlevel.isEnabled and fastlevel.isEnabled() or false))
-        if newState then
-          -- disable Smart Farm if on
-          if smartFarmEnabled then
+          if newState and smartFarmEnabled then
             smartFarmEnabled = false
             rfSet(function() if RF.setSmartFarm then RF.setSmartFarm(false) end end)
             notifyToggle("Smart Farm", false)
           end
-          -- enable fastlevel behavior, ensure auto-farm running
-          if fastlevel.enable then fastlevel.enable() end
-          if farm.setFastLevelEnabled then farm.setFastLevelEnabled(true) end
-          notifyToggle("Instant Level 70+", true, " — targeting Sahur only")
 
-          if not autoFarmEnabled then
-            autoFarmEnabled = true
-            rfSet(function() if RF.setAutoFarm then RF.setAutoFarm(true) end end)
+          autoFarmEnabled = newState
+
+          if autoFarmEnabled then
             if farm.setupAutoAttackRemote then farm.setupAutoAttackRemote() end
+            local sel = farm.getSelected and farm.getSelected() or {}
+            local extra = (#sel > 0) and (" for: " .. table.concat(sel, ", ")) or ""
+            notifyToggle("Auto-Farm", true, extra)
             task.spawn(function()
               farm.runAutoFarm(function() return autoFarmEnabled end, setCurrentTarget)
             end)
-            notifyToggle("Auto-Farm", true)
-          end
-        else
-          if fastlevel.disable then fastlevel.disable() end
-          if farm.setFastLevelEnabled then farm.setFastLevelEnabled(false) end
-          notifyToggle("Instant Level 70+", false)
-          -- Also turn off auto-farm as requested earlier
-          if autoFarmEnabled then
-            autoFarmEnabled = false
-            rfSet(function() if RF.setAutoFarm then RF.setAutoFarm(false) end end)
+          else
             setCurrentTarget("Current Target: None")
             notifyToggle("Auto-Farm", false)
           end
-        end
-      end,
+        end,
 
-      -- Private Server button expects _G.TeleportToPrivateServer to be set by your solo.lua
-      onPrivateServer = function()
-        task.spawn(function()
-          if type(_G.TeleportToPrivateServer) ~= "function" then
-            utils.notify("🌲 Private Server", "Run solo.lua first to set up the function!", 4)
-            return
+        onSmartFarmToggle = function(v)
+          if not smartFarm or not farm then return end
+          if suppressRF then return end
+          local newState = (v ~= nil) and v or (not smartFarmEnabled)
+
+          if newState and autoFarmEnabled then
+            autoFarmEnabled = false
+            rfSet(function() if RF.setAutoFarm then RF.setAutoFarm(false) end end)
+            notifyToggle("Auto-Farm", false)
           end
-          local ok, err = pcall(_G.TeleportToPrivateServer)
-          if ok then utils.notify("🌲 Private Server", "Teleport initiated!", 3)
-          else utils.notify("🌲 Private Server", "Failed: " .. tostring(err), 5) end
-        end)
-      end,
-    })
 
-    utils.notify("🌲 WoodzHUB", "Rayfield UI loaded.", 3)
+          smartFarmEnabled = newState
+
+          if smartFarmEnabled then
+            local function resolveMonsterInfo()
+              local RS = ReplicatedStorage
+              local paths = {
+                {"GameInfo","MonsterInfo"},{"MonsterInfo"},{"Shared","MonsterInfo"},
+                {"Modules","MonsterInfo"},{"Configs","MonsterInfo"},
+              }
+              for _, path in ipairs(paths) do
+                local node, ok = RS, true
+                for _, nm in ipairs(path) do
+                  node = node:FindFirstChild(nm)
+                  if not node then ok=false break end
+                end
+                if ok and node and node:IsA("ModuleScript") then return node end
+              end
+              for _, d in ipairs(RS:GetDescendants()) do
+                if d:IsA("ModuleScript") and d.Name=="MonsterInfo" then return d end
+              end
+              return nil
+            end
+
+            local module = resolveMonsterInfo()
+            notifyToggle("Smart Farm", true, module and (" — using " .. module:GetFullName()) or " (MonsterInfo not found; will stop)")
+            if module then
+              task.spawn(function()
+                smartFarm.runSmartFarm(
+                  function() return smartFarmEnabled end,
+                  setCurrentTarget,
+                  { module = module, safetyBuffer = 0.8, refreshInterval = 0.05 }
+                )
+              end)
+            else
+              smartFarmEnabled = false
+              rfSet(function() if RF.setSmartFarm then RF.setSmartFarm(false) end end)
+            end
+          else
+            setCurrentTarget("Current Target: None")
+            notifyToggle("Smart Farm", false)
+          end
+        end,
+
+        onToggleMerchant1 = function(v)
+          if not merchants then return end
+          if suppressRF then return end
+          autoBuyM1Enabled = (v ~= nil) and v or (not autoBuyM1Enabled)
+          if autoBuyM1Enabled then
+            notifyToggle("Merchant — Chicleteiramania", true)
+            task.spawn(function()
+              merchants.autoBuyLoop(
+                "SmelterMerchantService",
+                function() return autoBuyM1Enabled end,
+                function(_) end
+              )
+            end)
+          else
+            notifyToggle("Merchant — Chicleteiramania", false)
+          end
+        end,
+
+        onToggleMerchant2 = function(v)
+          if not merchants then return end
+          if suppressRF then return end
+          autoBuyM2Enabled = (v ~= nil) and v or (not autoBuyM2Enabled)
+          if autoBuyM2Enabled then
+            notifyToggle("Merchant — Bombardino Sewer", true)
+            task.spawn(function()
+              merchants.autoBuyLoop(
+                "SmelterMerchantService2",
+                function() return autoBuyM2Enabled end,
+                function(_) end
+              )
+            end)
+          else
+            notifyToggle("Merchant — Bombardino Sewer", false)
+          end
+        end,
+
+        onToggleCrates = function(v)
+          if not crates then return end
+          if suppressRF then return end
+          autoOpenCratesEnabled = (v ~= nil) and v or (not autoOpenCratesEnabled)
+          if autoOpenCratesEnabled then
+            if crates.refreshCrateInventory then crates.refreshCrateInventory(true) end
+            local delayText = 1
+            if constants and constants.crateOpenDelay then delayText = constants.crateOpenDelay end
+            notifyToggle("Crates", true, " (1 every " .. tostring(delayText) .. "s)")
+            task.spawn(function()
+              crates.autoOpenCratesEnabledLoop(function() return autoOpenCratesEnabled end)
+            end)
+          else
+            notifyToggle("Crates", false)
+          end
+        end,
+
+        onToggleAntiAFK = function(v)
+          if not antiAFK then return end
+          if suppressRF then return end
+          antiAfkEnabled = (v ~= nil) and v or (not antiAfkEnabled)
+          if antiAfkEnabled then antiAFK.enable() else antiAFK.disable() end
+          notifyToggle("Anti-AFK", antiAfkEnabled)
+        end,
+
+        onRedeemCodes = function()
+          if not redeemCodes then return end
+          task.spawn(function()
+            local ok, err = pcall(function()
+              redeemCodes.run({ dryRun = false, concurrent = true, delayBetween = 0.25 })
+            end)
+            if not ok then utils.notify("Codes", "Redeem failed: " .. tostring(err), 4) end
+          end)
+        end,
+
+        onFastLevelToggle = function(v)
+          if not (fastlevel and farm) then return end
+          if suppressRF then return end
+          local nowOn = (v ~= nil) and v or (not (fastlevel.isEnabled and fastlevel.isEnabled() or false))
+          if nowOn then
+            if smartFarmEnabled then
+              smartFarmEnabled = false
+              rfSet(function() if RF.setSmartFarm then RF.setSmartFarm(false) end end)
+              notifyToggle("Smart Farm", false)
+            end
+            if fastlevel.enable then fastlevel.enable() end
+            if farm.setFastLevelEnabled then farm.setFastLevelEnabled(true) end
+            notifyToggle("Instant Level 70+", true, " — targeting Sahur only")
+
+            if not autoFarmEnabled then
+              autoFarmEnabled = true
+              rfSet(function() if RF.setAutoFarm then RF.setAutoFarm(true) end end)
+              if farm.setupAutoAttackRemote then farm.setupAutoAttackRemote() end
+              task.spawn(function()
+                farm.runAutoFarm(function() return autoFarmEnabled end, setCurrentTarget)
+              end)
+              notifyToggle("Auto-Farm", true)
+            end
+          else
+            if fastlevel.disable then fastlevel.disable() end
+            if farm.setFastLevelEnabled then farm.setFastLevelEnabled(false) end
+            notifyToggle("Instant Level 70+", false)
+            if autoFarmEnabled then
+              autoFarmEnabled = false
+              rfSet(function() if RF.setAutoFarm then RF.setAutoFarm(false) end end)
+              setCurrentTarget("Current Target: None")
+              notifyToggle("Auto-Farm", false)
+            end
+          end
+        end,
+
+        onPrivateServer = function()
+          task.spawn(function()
+            if type(_G.TeleportToPrivateServer) ~= "function" then
+              utils.notify("🌲 Private Server", "Run solo.lua first to set up the function!", 4)
+              return
+            end
+            local ok, err = pcall(_G.TeleportToPrivateServer)
+            if ok then utils.notify("🌲 Private Server", "Teleport initiated!", 3)
+            else utils.notify("🌲 Private Server", "Failed: " .. tostring(err), 5) end
+          end)
+        end,
+      }, profile.ui or {}) -- << pass profile UI flags
+      utils.notify("🌲 WoodzHUB", "Rayfield UI loaded.", 3)
+    end
   else
     warn("[app.lua] ui_rayfield.lua missing - UI not loaded. Core still running.")
   end
@@ -508,10 +468,26 @@ local function boot()
 end
 
 ----------------------------------------------------------------------
--- Go
+-- Export app.start() for loaders that expect it, and also run once now
 ----------------------------------------------------------------------
-local ok, err = pcall(boot)
-if not ok then
-  warn("[WoodzHUB] [init] Failed to load app.lua (or .start missing)")
-  warn(err)
+local app = {}
+
+function app.start()
+  if _G.WOODZHUB_APP_STARTED then return end
+  _G.WOODZHUB_APP_STARTED = true
+  local ok, err = pcall(boot)
+  if not ok then
+    warn("[WoodzHUB] [init] Failed to load app.lua")
+    warn(err)
+  end
 end
+
+-- If executed directly (not required as a module), also call start()
+local ok_direct, err_direct = pcall(function()
+  app.start()
+end)
+if not ok_direct then
+  warn(err_direct)
+end
+
+return app
