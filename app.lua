@@ -1,9 +1,8 @@
 -- app.lua — executor/table-sibling safe bootstrap (no top-level require)
--- It never calls require(), so your loader won't assert if siblings aren't ready.
+-- Exposes start() for your init.lua to call.
 
 -- Double-boot guard
-if _G.__WOODZHUB_BOOTED then return end
-_G.__WOODZHUB_BOOTED = true
+if _G.__WOODZHUB_BOOTED == nil then _G.__WOODZHUB_BOOTED = false end
 
 -- Minimal utils (fallback)
 local function getUtils()
@@ -35,12 +34,8 @@ local utils = getUtils()
 local function getSibling(name)
   local parent = script and script.Parent
   if not parent or type(parent) ~= "table" then return nil end
-
-  -- exact key
   local v = rawget(parent, name)
   if v ~= nil then return v end
-
-  -- try case-insensitive
   local lname = string.lower(name)
   for k, val in pairs(parent) do
     if type(k) == "string" and string.lower(k) == lname then
@@ -50,7 +45,6 @@ local function getSibling(name)
   return nil
 end
 
--- Wait briefly for loader to inject siblings into script.Parent (table)
 local function waitFor(keys, timeout)
   timeout = timeout or 2.0
   local t0 = tick()
@@ -69,8 +63,8 @@ end
 waitFor({ "games", "ui_rayfield", "farm", "smart_target", "anti_afk", "merchants", "crates", "redeem_unredeemed_codes", "fastlevel" }, 1.25)
 
 -- Pull whatever is available (tables/functions your loader provided)
-local games                 = getSibling("games")                      -- table expected
-local uiRF                  = getSibling("ui_rayfield")                -- module table with .build
+local games                 = getSibling("games")
+local uiRF                  = getSibling("ui_rayfield")
 local farm                  = getSibling("farm")
 local smartFarm             = getSibling("smart_target")
 local antiAFK               = getSibling("anti_afk")
@@ -78,7 +72,7 @@ local merchants             = getSibling("merchants")
 local crates                = getSibling("crates")
 local redeem                = getSibling("redeem_unredeemed_codes")
 local fastlevel             = getSibling("fastlevel")
-local constants             = getSibling("constants")                  -- optional
+local constants             = getSibling("constants")
 
 -- Choose profile (place:<placeId>, gameId, or default)
 local placeKey = "place:" .. tostring(game.PlaceId)
@@ -100,7 +94,7 @@ if type(games) ~= "table" then
   }
 end
 
-local profile  = games[placeKey] or games[uniKey] or games.default or games["default"] or {}
+local profile    = games[placeKey] or games[uniKey] or games.default or games["default"] or {}
 local profileKey = games[placeKey] and placeKey or (games[uniKey] and uniKey or "default")
 print(("[app.lua] profile: %s (key=%s)"):format(profile.name or "?", profileKey))
 
@@ -375,6 +369,12 @@ end
 
 -- Boot: build Rayfield UI if available and requested by profile
 local function boot()
+  if _G.__WOODZHUB_BOOTED then
+    -- Already booted by a previous call (e.g., executor rerun or auto-boot)
+    return
+  end
+  _G.__WOODZHUB_BOOTED = true
+
   local uiCfg = profile.ui or {}
   if type(uiRF) ~= "table" or type(uiRF.build) ~= "function" then
     print("[app.lua] ui_rayfield.lua missing - UI not loaded. Core still running.")
@@ -396,4 +396,9 @@ local function boot()
   utils.notify("🌲 WoodzHUB", "Loaded successfully.", 3)
 end
 
-boot()
+-- Export start() for your init.lua
+local M = {}
+function M.start()
+  boot()
+end
+return M
