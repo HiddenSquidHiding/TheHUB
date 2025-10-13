@@ -1,20 +1,17 @@
 -- ui_rayfield.lua
--- Rayfield overlay UI for WoodzHUB (feature-gated by uiFlags from games.lua).
--- Single-instance; safe if the executor re-runs it.
+-- Rayfield UI builder (single-instance). Driven by uiFlags from games.lua.
 
 ----------------------------------------------------------------------
--- Minimal utils
+-- utils (minimal)
 ----------------------------------------------------------------------
 local function getUtils()
   if rawget(getfenv(), "__WOODZ_UTILS") then return __WOODZ_UTILS end
-  return {
-    notify = function(_, _) end,
-  }
+  return { notify = function() end }
 end
 local utils = getUtils()
 
 ----------------------------------------------------------------------
--- Singleton: don't build twice
+-- Singleton: prevent double window
 ----------------------------------------------------------------------
 if _G.WOODZHUB_RAYFIELD_UI and type(_G.WOODZHUB_RAYFIELD_UI) == "table" then
   return _G.WOODZHUB_RAYFIELD_UI
@@ -28,25 +25,21 @@ local okRF, Rayfield = pcall(function()
 end)
 if not okRF or not Rayfield then
   warn("[ui_rayfield] Rayfield failed to load")
-  return {
-    build = function()
-      return setmetatable({}, {
-        __index = function()
-          return function() end
-        end
-      })
-    end
-  }
+  return { build = function() return {} end }
 end
 
 ----------------------------------------------------------------------
--- Helpers
+-- Optional farm (for model picker)
 ----------------------------------------------------------------------
-local function truthy(x) return x == nil or x == true end
-
--- optional farm access (only if present)
 local farm = nil
-pcall(function() farm = require(script.Parent and script.Parent.farm) end)
+pcall(function()
+  -- try executor/memory loader first
+  if _G.WOODZHUB_FS and _G.WOODZHUB_FS["farm.lua"] then
+    local chunk = loadstring(_G.WOODZHUB_FS["farm.lua"], "=farm.lua")
+    farm = (chunk and select(2, pcall(chunk))) or nil
+  end
+  if not farm then farm = require("farm") end
+end)
 
 ----------------------------------------------------------------------
 -- Module
@@ -56,13 +49,12 @@ local M = {}
 
 function M.build(handlers, uiFlags)
   handlers = handlers or {}
-  uiFlags  = uiFlags  or {}
+  uiFlags  = uiFlags or {}
 
   if SINGLETON.windowBuilt and SINGLETON.UI then
     return SINGLETON.UI
   end
 
-  -- Window
   local Window = Rayfield:CreateWindow({
     Name                = "🌲 WoodzHUB",
     LoadingTitle        = "WoodzHUB",
@@ -71,17 +63,14 @@ function M.build(handlers, uiFlags)
     KeySystem           = false,
   })
 
-  -- Tabs
   local MainTab    = Window:CreateTab("Main")
   local OptionsTab = Window:CreateTab("Options")
 
-  --------------------------------------------------------------------
-  -- MAIN TAB
-  --------------------------------------------------------------------
+  -- Status
   MainTab:CreateSection("Status")
   local currentLabel = MainTab:CreateLabel("Ready.")
 
-  -- Model picker (search + multi-select) — only if enabled by profile
+  -- Model picker
   local modelDropdown, currentSearch = nil, ""
   local suppressDropdown = false
 
@@ -111,6 +100,8 @@ function M.build(handlers, uiFlags)
     suppressDropdown = false
   end
 
+  local function truthy(x) return x == nil or x == true end
+
   if truthy(uiFlags.modelPicker) then
     MainTab:CreateSection("Targets")
     MainTab:CreateInput({
@@ -122,8 +113,6 @@ function M.build(handlers, uiFlags)
         refreshDropdownOptions()
       end,
     })
-
-    -- seed farm list once
     pcall(function() if farm and farm.getMonsterModels then farm.getMonsterModels() end end)
 
     modelDropdown = MainTab:CreateDropdown({
@@ -155,14 +144,10 @@ function M.build(handlers, uiFlags)
     })
   end
 
-  -- Farming toggles
-  local rfAutoFarm, rfSmartFarm, rfFastLvl
-  if truthy(uiFlags.autoFarm) or truthy(uiFlags.smartFarm) or uiFlags.fastlevel then
-    MainTab:CreateSection("Farming")
-  end
-
+  -- Farming toggles (Main)
   if truthy(uiFlags.autoFarm) then
-    rfAutoFarm = MainTab:CreateToggle({
+    MainTab:CreateSection("Farming")
+    MainTab:CreateToggle({
       Name = "Auto-Farm",
       CurrentValue = false,
       Flag = "woodz_auto_farm",
@@ -171,7 +156,7 @@ function M.build(handlers, uiFlags)
   end
 
   if truthy(uiFlags.smartFarm) then
-    rfSmartFarm = MainTab:CreateToggle({
+    MainTab:CreateToggle({
       Name = "Smart Farm",
       CurrentValue = false,
       Flag = "woodz_smart_farm",
@@ -179,21 +164,10 @@ function M.build(handlers, uiFlags)
     })
   end
 
-  if uiFlags.fastlevel then
-    rfFastLvl = OptionsTab:CreateToggle({
-      Name = "Instant Level 70+ (Sahur only)",
-      CurrentValue = false,
-      Flag = "woodz_fastlevel",
-      Callback = function(v) if handlers.onFastLevelToggle then handlers.onFastLevelToggle(v) end end,
-    })
-  end
-
-  --------------------------------------------------------------------
-  -- OPTIONS TAB
-  --------------------------------------------------------------------
+  -- Options: AFK / Merchants / Crates / Extras / Dungeon
   if truthy(uiFlags.antiAFK) then
     OptionsTab:CreateSection("AFK")
-    local rfAFK = OptionsTab:CreateToggle({
+    OptionsTab:CreateToggle({
       Name = "Anti-AFK",
       CurrentValue = false,
       Flag = "woodz_afk",
@@ -205,15 +179,14 @@ function M.build(handlers, uiFlags)
     OptionsTab:CreateSection("Merchants / Crates")
   end
 
-  local rfMerch1, rfMerch2, rfCrates
   if uiFlags.merchants then
-    rfMerch1 = OptionsTab:CreateToggle({
+    OptionsTab:CreateToggle({
       Name = "Auto Buy Mythics (Chicleteiramania)",
       CurrentValue = false,
       Flag = "woodz_m1",
       Callback = function(v) if handlers.onToggleMerchant1 then handlers.onToggleMerchant1(v) end end,
     })
-    rfMerch2 = OptionsTab:CreateToggle({
+    OptionsTab:CreateToggle({
       Name = "Auto Buy Mythics (Bombardino Sewer)",
       CurrentValue = false,
       Flag = "woodz_m2",
@@ -222,7 +195,7 @@ function M.build(handlers, uiFlags)
   end
 
   if uiFlags.crates then
-    rfCrates = OptionsTab:CreateToggle({
+    OptionsTab:CreateToggle({
       Name = "Auto Open Crates",
       CurrentValue = false,
       Flag = "woodz_crates",
@@ -230,7 +203,7 @@ function M.build(handlers, uiFlags)
     })
   end
 
-  if uiFlags.redeemCodes or uiFlags.privateServer then
+  if uiFlags.redeemCodes or uiFlags.privateServer or uiFlags.fastlevel or uiFlags.dungeon then
     OptionsTab:CreateSection("Extras")
   end
 
@@ -258,17 +231,23 @@ function M.build(handlers, uiFlags)
     })
   end
 
-  -- NEW: Dungeon section
-  local rfDungeonAuto, rfDungeonReplay
+  if uiFlags.fastlevel then
+    OptionsTab:CreateToggle({
+      Name = "Instant Level 70+ (Sahur only)",
+      CurrentValue = false,
+      Flag = "woodz_fastlevel",
+      Callback = function(v) if handlers.onFastLevelToggle then handlers.onFastLevelToggle(v) end end,
+    })
+  end
+
   if uiFlags.dungeon then
-    OptionsTab:CreateSection("Dungeon")
-    rfDungeonAuto = OptionsTab:CreateToggle({
+    OptionsTab:CreateToggle({
       Name = "Dungeon Auto-Attack",
       CurrentValue = false,
       Flag = "woodz_dungeon_auto",
       Callback = function(v) if handlers.onDungeonAuto then handlers.onDungeonAuto(v) end end,
     })
-    rfDungeonReplay = OptionsTab:CreateToggle({
+    OptionsTab:CreateToggle({
       Name = "Auto Replay (Play Again)",
       CurrentValue = false,
       Flag = "woodz_dungeon_replay",
@@ -276,39 +255,30 @@ function M.build(handlers, uiFlags)
     })
   end
 
-  --------------------------------------------------------------------
-  -- Expose control surface
-  --------------------------------------------------------------------
+  -- UI control surface
   local UI = {
-    -- Status
     setCurrentTarget = function(text) pcall(function() currentLabel:Set(text or "Ready.") end) end,
 
-    -- Farming setters
-    setAutoFarm  = function(on) if rfAutoFarm  then pcall(function() rfAutoFarm:Set(on and true or false) end) end end,
-    setSmartFarm = function(on) if rfSmartFarm then pcall(function() rfSmartFarm:Set(on and true or false) end) end end,
-    setFastLevel = function(on) if rfFastLvl   then pcall(function() rfFastLvl:Set(on and true or false) end)   end end,
+    setAutoFarm  = function(on) end,
+    setSmartFarm = function(on) end,
+    setFastLevel = function(on) end,
 
-    -- Merchants/Crates
-    setMerchant1 = function(on) if rfMerch1 then pcall(function() rfMerch1:Set(on and true or false) end) end end,
-    setMerchant2 = function(on) if rfMerch2 then pcall(function() rfMerch2:Set(on and true or false) end) end end,
-    setCrates    = function(on) if rfCrates  then pcall(function() rfCrates:Set(on and true or false) end)  end end,
+    setMerchant1 = function(on) end,
+    setMerchant2 = function(on) end,
+    setCrates    = function(on) end,
 
-    -- Dungeon
-    setDungeonAuto   = function(on) if rfDungeonAuto   then pcall(function() rfDungeonAuto:Set(on and true or false) end) end end,
-    setDungeonReplay = function(on) if rfDungeonReplay then pcall(function() rfDungeonReplay:Set(on and true or false) end) end end,
+    setDungeonAuto   = function(on) end,
+    setDungeonReplay = function(on) end,
 
-    -- Model list control (if picker is enabled)
     refreshModelOptions = function() pcall(refreshDropdownOptions) end,
     syncModelSelection  = function() pcall(syncDropdownSelectionFromFarm) end,
 
-    -- Cleanup
     destroy = function() pcall(function() Rayfield:Destroy() end) end,
   }
 
   SINGLETON.windowBuilt = true
   SINGLETON.UI = UI
   _G.WOODZHUB_RAYFIELD_UI = UI
-
   utils.notify("🌲 WoodzHUB", "Rayfield UI loaded.", 3)
   return UI
 end
