@@ -61,7 +61,7 @@ return {
   ["place:90608986169653"] = {
     name = "Brainrot Dungeons",
     -- maybe a lighter set for the dungeon
-    modules = { "anti_afk" }, -- swap in your dungeon-specific modules when ready
+    modules = { "dungeon_be", "anti_afk" }, -- swap in your dungeon-specific modules when ready
     ui = {
       modelPicker   = false,  -- no picker in dungeon
       currentTarget = false,
@@ -74,6 +74,7 @@ return {
       redeemCodes   = false,
       fastlevel     = false,
       privateServer = false,
+      dungeon       = true,
     },
   },
 }
