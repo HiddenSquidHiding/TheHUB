@@ -1,8 +1,374 @@
--- farm.lua (snippet for brevity; replace full file if needed, but focus on runAutoFarm)
--- ... (rest of code above)
+-- farm.lua
+-- Auto-farm with smooth constraint-based follow (no glide, no judder).
+-- Uses data from data_monsters.lua (Weather / To Sahur / Forced) loaded via HTTP or preloaded global.
+-- Features:
+--  • Weather preemption with TTK (≤ 5s) — switch mid-fight if quick to kill.
+--  • FastLevel mode — ignores 3s stall rule.
+--  • Death recovery — on death, respawn and teleport right back to the same mob.
+
+-- 🔧 Utils
+local function getUtils()
+  local p = script and script.Parent
+  if p and p._deps and p._deps.utils then return p._deps.utils end
+  if rawget(getfenv(), "__WOODZ_UTILS") then return __WOODZ_UTILS end
+  error("[farm.lua] utils missing; ensure init.lua injects siblings._deps.utils before loading farm.lua")
+end
+
+local utils = getUtils()
+
+-- ⚠️ data_monsters.lua loader (no ModuleScript require; executor-friendly)
+-- It will first use _G.WOODZ_DATA_MONSTERS if your init preloaded it,
+-- otherwise it fetches https://.../data_monsters.lua using _G.WOODZ_BASE_URL
+local data
+do
+  local g = rawget(getfenv(), "_G")
+  if g and type(g.WOODZ_DATA_MONSTERS) == "table" then
+    data = g.WOODZ_DATA_MONSTERS
+  end
+
+  if not data then
+    local base = g and g.WOODZ_BASE_URL
+    if type(base) == "string" and #base > 0 then
+      local ok, src = pcall(function()
+        return game:HttpGet((base:sub(-1) == "/" and base or (base .. "/")) .. "data_monsters.lua")
+      end)
+      if ok and type(src) == "string" and #src > 0 then
+        local chunk, err = loadstring(src, "=data_monsters.lua")
+        if chunk then
+          local ok2, ret = pcall(chunk)
+          if ok2 and type(ret) == "table" then
+            data = ret
+            _G.WOODZ_DATA_MONSTERS = data -- cache globally
+          else
+            error("[farm.lua] evaluating data_monsters.lua failed: " .. tostring(ret))
+          end
+        else
+          error("[farm.lua] loadstring(data_monsters.lua) failed: " .. tostring(err))
+        end
+      else
+        error("[farm.lua] HttpGet data_monsters.lua failed (check _G.WOODZ_BASE_URL)")
+      end
+    else
+      error("[farm.lua] _G.WOODZ_BASE_URL missing; cannot fetch data_monsters.lua")
+    end
+  end
+end
+
+assert(
+  data and type(data.weatherEventModels) == "table" and type(data.toSahurModels) == "table",
+  "[farm.lua] data_monsters.lua missing or invalid (weather/toSahur lists required)"
+)
+
+-- Services
+local Players           = game:GetService("Players")
+local Workspace         = game:GetService("Workspace")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService        = game:GetService("RunService")
+
+local player = Players.LocalPlayer
+
+local M = {}
 
 ----------------------------------------------------------------------
--- Public: run auto farm (fixed: throttled label updates)
+-- Config
+----------------------------------------------------------------------
+local WEATHER_TIMEOUT               = 30    -- seconds (Weather Events only)
+local NON_WEATHER_STALL_TIMEOUT     = 3     -- seconds without HP decreasing → skip (disabled in FastLevel)
+local ABOVE_OFFSET                  = Vector3.new(0, 20, 0)
+
+-- Weather preemption config
+local WEATHER_TTK_LIMIT             = 5.0   -- seconds — only switch if estimated TTK ≤ this
+local WEATHER_PROBE_TIME            = 0.35  -- seconds to sample DPS on a weather mob (quick)
+local WEATHER_PREEMPT_POLL          = 0.2   -- seconds between preemption checks during a fight
+
+-- Constraint tuning
+local POS_RESPONSIVENESS            = 200
+local POS_MAX_FORCE                 = 1e9
+local ORI_RESPONSIVENESS            = 200
+local ORI_MAX_TORQUE                = 1e9
+
+----------------------------------------------------------------------
+-- Selection/filter
+----------------------------------------------------------------------
+local allMonsterModels = {}
+local filteredMonsterModels = {}
+local selectedMonsterModels = { "Weather Events" }
+
+local WEATHER_NAMES = data.weatherEventModels or {}
+local SAHUR_NAMES   = data.toSahurModels     or {}
+
+local function isWeatherName(name)
+  local lname = string.lower(name or "")
+  for _, w in ipairs(WEATHER_NAMES) do
+    if lname == string.lower(w) then return true end
+  end
+  return false
+end
+
+local function isSahurName(name)
+  local lname = string.lower(name or "")
+  for _, s in ipairs(SAHUR_NAMES) do
+    if lname == string.lower(s) then return true end
+  end
+  return false
+end
+
+-- 🔸 Weather helpers
+local function isWeatherSelected()
+  return table.find(selectedMonsterModels, "Weather Events") ~= nil
+end
+
+local function findWeatherEnemies()
+  if not isWeatherSelected() then return {} end
+  local out = {}
+  for _, node in ipairs(Workspace:GetDescendants()) do
+    if node:IsA("Model") and not Players:GetPlayerFromCharacter(node) then
+      local h = node:FindFirstChildOfClass("Humanoid")
+      if h and h.Health > 0 and isWeatherName(node.Name) then
+        table.insert(out, node)
+      end
+    end
+  end
+  return out
+end
+
+local function pickLowestHPWeather()
+  local list = findWeatherEnemies()
+  local best, bestHP = nil, math.huge
+  for _, m in ipairs(list) do
+    local h = m:FindFirstChildOfClass("Humanoid")
+    if h and h.Health > 0 and h.Health < bestHP then
+      best, bestHP = m, h.Health
+    end
+  end
+  return best
+end
+
+-- 🔸 FastLevel mode flag (set from app/fastlevel toggle)
+local FASTLEVEL_MODE = false
+function M.setFastLevelEnabled(on)
+  FASTLEVEL_MODE = on and true or false
+end
+
+function M.getSelected() return selectedMonsterModels end
+function M.setSelected(list)
+  selectedMonsterModels = {}
+  for _, n in ipairs(list or {}) do table.insert(selectedMonsterModels, n) end
+end
+function M.toggleSelect(name)
+  local i = table.find(selectedMonsterModels, name)
+  if i then table.remove(selectedMonsterModels, i)
+  else table.insert(selectedMonsterModels, name) end
+end
+function M.isSelected(name)
+  return table.find(selectedMonsterModels, name) ~= nil
+end
+
+----------------------------------------------------------------------
+-- Monster discovery / filtering
+----------------------------------------------------------------------
+local function pushUnique(valid, name)
+  if not name then return end
+  for _, v in ipairs(valid) do if v == name then return end end
+  for _, s in ipairs(SAHUR_NAMES)   do if s == name then return end end
+  for _, w in ipairs(WEATHER_NAMES) do if w == name then return end end
+  table.insert(valid, name)
+end
+
+function M.getMonsterModels()
+  local valid = {}
+  for _, node in ipairs(Workspace:GetDescendants()) do
+    if node:IsA("Model") and not Players:GetPlayerFromCharacter(node) then
+      local hum = node:FindFirstChildOfClass("Humanoid")
+      if hum and hum.Health > 0 then
+        pushUnique(valid, node.Name)
+      end
+    end
+  end
+
+  if data and data.forcedMonsters then
+    for _, nm in ipairs(data.forcedMonsters) do pushUnique(valid, nm) end
+  end
+
+  table.insert(valid, "To Sahur")
+  table.insert(valid, "Weather Events")
+
+  table.sort(valid)
+  allMonsterModels = valid
+  filteredMonsterModels = table.clone(valid)
+  return valid
+end
+
+function M.filterMonsterModels(search)
+  local text = tostring(search or ""):lower()
+  if text == "" then
+    filteredMonsterModels = table.clone(allMonsterModels)
+    return filteredMonsterModels
+  end
+
+  local out = {}
+  for _, v in ipairs(allMonsterModels) do
+    if v:lower():find(text, 1, true) then
+      table.insert(out, v)
+    end
+  end
+  filteredMonsterModels = out
+  return out
+end
+
+----------------------------------------------------------------------
+-- Auto-attack remote setup (confirmed path)
+----------------------------------------------------------------------
+local autoAttackRemote
+function M.setupAutoAttackRemote()
+  local ok, remote = pcall(function()
+    return ReplicatedStorage:WaitForChild("Packages"):WaitForChild("Knit"):WaitForChild("Services"):WaitForChild("MonsterService"):WaitForChild("RF"):WaitForChild("RequestAttack")
+  end)
+  if ok and remote and remote:IsA("RemoteFunction") then
+    autoAttackRemote = remote
+    print("[farm.lua] Attack remote loaded successfully.")
+    utils.notify("🌲 Auto-Farm", "RequestAttack remote found and ready.", 3)
+  else
+    autoAttackRemote = nil
+    warn("[farm.lua] Failed to load RequestAttack remote.")
+    utils.notify("🌲 Auto-Farm", "RequestAttack remote not found; teleport fallback only.", 5)
+  end
+end
+
+----------------------------------------------------------------------
+-- Teleport / velocity helpers
+----------------------------------------------------------------------
+local function hardTeleport(cf)
+  local character = player.Character
+  if not character then return end
+  local hrp = character:FindFirstChild("HumanoidRootPart")
+  if hrp then
+    hrp.CFrame = cf
+  end
+end
+
+local function zeroVel(part)
+  if part and part:IsA("BasePart") then
+    part.Velocity = Vector3.new()
+    part.RotVelocity = Vector3.new()
+    part.AssemblyLinearVelocity = Vector3.new()
+    part.AssemblyAngularVelocity = Vector3.new()
+  end
+end
+
+local function isValidCFrame(cf)
+  return cf and cf.Position.Magnitude < math.huge
+end
+
+local function findBasePart(model)
+  local part = model:FindFirstChild("HumanoidRootPart")
+  if part then return part end
+  for _, p in ipairs(model:GetChildren()) do
+    if p:IsA("BasePart") then return p end
+  end
+  return nil
+end
+
+----------------------------------------------------------------------
+-- Smooth follow constraint maker (fixed: OneAttachment mode, no dummy)
+----------------------------------------------------------------------
+local function makeSmoothFollow(hrp)
+  local character = player.Character
+  if not character or not hrp then return nil end
+
+  local att0 = Instance.new("Attachment")
+  att0.Parent = hrp
+
+  local posConstraint = Instance.new("AlignPosition")
+  posConstraint.Attachment0 = att0
+  posConstraint.Mode = Enum.PositionAlignmentMode.OneAttachment
+  posConstraint.MaxForce = POS_MAX_FORCE
+  posConstraint.Responsiveness = POS_RESPONSIVENESS
+  posConstraint.RigidityEnabled = false
+  posConstraint.Parent = hrp
+
+  local oriConstraint = Instance.new("AlignOrientation")
+  oriConstraint.Attachment0 = att0
+  oriConstraint.Mode = Enum.OrientationAlignmentMode.OneAttachment
+  oriConstraint.MaxTorque = ORI_MAX_TORQUE
+  oriConstraint.Responsiveness = ORI_RESPONSIVENESS
+  oriConstraint.RigidityEnabled = false
+  oriConstraint.Parent = hrp
+
+  local function setGoal(cf)
+    if isValidCFrame(cf) then
+      posConstraint.Position = cf.Position
+      oriConstraint.CFrame = cf
+    end
+  end
+
+  local function destroy()
+    pcall(function()
+      posConstraint:Destroy()
+      oriConstraint:Destroy()
+      att0:Destroy()
+    end)
+  end
+
+  return { setGoal = setGoal, destroy = destroy }
+end
+
+----------------------------------------------------------------------
+-- TTK estimator (probe DPS briefly)
+----------------------------------------------------------------------
+local function estimateTTK(enemy, probeTime)
+  local hum = enemy:FindFirstChildOfClass("Humanoid")
+  if not hum or hum.Health <= 0 then return math.huge end
+  local part = enemy:FindFirstChild("HumanoidRootPart") or findBasePart(enemy)
+  if not part or not autoAttackRemote then return math.huge end
+
+  local h0 = hum.Health
+  local t0 = tick()
+  local tEnd = t0 + (probeTime or WEATHER_PROBE_TIME)
+
+  while tick() < tEnd and enemy.Parent and hum.Health > 0 do
+    pcall(function() autoAttackRemote:InvokeServer(part.CFrame) end)
+    RunService.Heartbeat:Wait()
+  end
+
+  local elapsed = math.max(0.05, tick() - t0)
+  local h1 = hum.Health
+  local dps = (h0 - h1) / elapsed
+  if dps <= 0 then return math.huge end
+
+  local ttk = h1 / dps
+  return ttk
+end
+
+----------------------------------------------------------------------
+-- Engagement (enter/restore) helpers (fixed: no IsA on CFrame)
+----------------------------------------------------------------------
+local function calcHoverCF(enemy)
+  local part = enemy:FindFirstChild("HumanoidRootPart") or findBasePart(enemy)
+  if part then return part.CFrame * CFrame.new(ABOVE_OFFSET) end
+  local okPivot, pcf = pcall(function() return enemy:GetPivot() end)
+  return (okPivot and isValidCFrame(pcf)) and (pcf * CFrame.new(ABOVE_OFFSET)) or nil
+end
+
+local function beginEngagement(enemy)
+  local targetCF = calcHoverCF(enemy)
+  if not targetCF then return nil, nil, nil end
+  hardTeleport(targetCF)
+
+  local character = player.Character
+  local hum = character and character:FindFirstChildOfClass("Humanoid")
+  local hrp = character and character:FindFirstChild("HumanoidRootPart")
+  if not character or not hum or not hrp then return nil, nil, nil end
+
+  local oldPS = hum.PlatformStand
+  hum.PlatformStand = true
+  zeroVel(hrp)
+  local ctl = makeSmoothFollow(hrp)
+  return ctl, hum, oldPS
+end
+
+----------------------------------------------------------------------
+-- Public: run auto farm
 ----------------------------------------------------------------------
 function M.runAutoFarm(flagGetter, setTargetText)
   if not autoAttackRemote then
@@ -77,16 +443,11 @@ function M.runAutoFarm(flagGetter, setTargetText)
                 local lastHealth  = eh.Health
                 local lastDropAt  = tick()
                 local startedAt   = tick()
-                local lastLabelUpdate = 0  -- Throttle label
 
                 local hcConn = eh.HealthChanged:Connect(function(h)
+                  label(("Current Target: %s (Health: %s)"):format(enemy.Name, math.floor(h)))
                   if h < lastHealth then lastDropAt = tick() end
                   lastHealth = h
-                  local now = tick()
-                  if now - lastLabelUpdate > 0.5 then  -- Throttle to 0.5s
-                    label(("Current Target: %s (Health: %s)"):format(enemy.Name, math.floor(h)))
-                    lastLabelUpdate = now
-                  end
                 end)
 
                 -- attack loop (with weather preemption + FastLevel stall override + death recovery)
