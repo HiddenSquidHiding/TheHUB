@@ -33,16 +33,17 @@ local function r(name)
 end
 
 -- Optional modules (loaded if present)
-local UI        = r("ui_rayfield")
-local gamesCfg  = r("games")
-local farm      = r("farm")
-local smart     = r("smart_target")
-local merchants = r("merchants")
-local crates    = r("crates")
-local antiAFK   = r("anti_afk")
-local redeem    = r("redeem_unredeemed_codes")
-local fastlevel = r("fastlevel")
-local dungeonBE = r("dungeon_be")
+local UI          = r("ui_rayfield")
+local gamesCfg    = r("games")
+local farm        = r("farm")
+local smart       = r("smart_target")
+local merchants   = r("merchants")
+local crates      = r("crates")
+local antiAFK     = r("anti_afk")
+local redeem      = r("redeem_unredeemed_codes")
+local fastlevel   = r("fastlevel")
+local dungeonBE   = r("dungeon_be")
+local sahurHopper = r("sahur_hopper")
 
 -- 🔹 NEW: load solo.lua at boot so the Private Server button can call it later.
 -- IMPORTANT: your solo.lua must NOT teleport on load; it should only define _G.TeleportToPrivateServer.
