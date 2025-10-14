@@ -44,10 +44,9 @@ local redeem    = r("redeem_unredeemed_codes")
 local fastlevel = r("fastlevel")
 local dungeonBE = r("dungeon_be")
 local sahurHopper = r("sahur_hopper")
-local serverHopper = r("server_hopper")  -- New module
 
 -- 🔹 NEW: load solo.lua at boot so the Private Server button can call it later.
-local solo = r("solo")  -- ignore return; we just want its side-effect (define the function)
+local solo = r("solo")  -- ignore return; side-effect only
 
 -- Pick a profile from games.lua
 local function profileFromGames()
@@ -59,7 +58,6 @@ local function profileFromGames()
       merchants = false, crates = false, antiAFK = true,
       redeemCodes = true, fastlevel = true, privateServer = true,
       sahurHopper = true,
-      serverHopper = true,  -- New toggle
       dungeonAuto = false, dungeonReplay = false,
     },
   }
@@ -76,6 +74,22 @@ end
 
 local App = {}
 
+-- Shared state for farm loops (fixed: immediate cancel + UI sync)
+local autoFarmOn = false
+local autoFarmThread = nil
+
+local function stopAutoFarm()
+  autoFarmOn = false
+  if autoFarmThread then
+    task.cancel(autoFarmThread)  -- Immediate kill
+    autoFarmThread = nil
+  end
+  if App.UI and App.UI.setAutoFarm then
+    pcall(App.UI.setAutoFarm, false)
+  end
+  print("[app.lua] Auto-Farm stopped")
+end
+
 function App.start()
   if _G.__WOODZ_APP_STARTED then return end
   _G.__WOODZ_APP_STARTED = true
@@ -84,29 +98,39 @@ function App.start()
   note("[app.lua]", ("profile: %s (key=%s)"):format(profile.name or "?", key), 3)
 
   if not UI or type(UI.build) ~= "function" then
-    note("[ui_rayfield]", "Rayfield failed to load (ui_rayfield.lua missing or build() not found)", 5)
+    note("[ui_rayfield]", "Rayfield failed to load", 5)
     return
   end
 
   -- Build UI with hooks
   local h = {
-    -- Picker hooks (for farm/smart_target)
+    -- Picker hooks
     picker_getOptions = (farm and farm.getMonsterModels) or (smart and smart.getOptions),
     picker_getSelected = (farm and farm.getSelected) or (smart and smart.getSelected),
     picker_setSelected = (farm and farm.setSelected) or (smart and smart.setSelected),
     picker_clear = (farm and function() farm.setSelected({}) end) or (smart and smart.clear),
 
-    -- Farm toggles
+    -- Farm toggles (fixed: task.cancel for immediate stop, sync UI)
     onAutoFarmToggle = (profile.ui.autoFarm and function(v)
-      local on = (v ~= nil) and v or false
-      if on and farm and farm.setupAutoAttackRemote then farm.setupAutoAttackRemote() end
-      if farm and farm.runAutoFarm then
-        task.spawn(function() farm.runAutoFarm(function() return on end, App.UI and App.UI.setCurrentTarget) end)
+      local newOn = (v ~= nil) and v or not autoFarmOn
+      print("[app.lua] Auto-Farm toggle to:", newOn)
+      if newOn then
+        stopAutoFarm()  -- Clean previous
+        if farm and farm.setupAutoAttackRemote then pcall(farm.setupAutoAttackRemote) end
+        if farm and farm.runAutoFarm then
+          autoFarmThread = task.spawn(function()
+            farm.runAutoFarm(function() return autoFarmOn end, App.UI and App.UI.setCurrentTarget)
+          end)
+        end
+        if App.UI and App.UI.setAutoFarm then pcall(App.UI.setAutoFarm, true) end
+      else
+        stopAutoFarm()
       end
     end) or nil,
+
     onSmartFarmToggle = (profile.ui.smartFarm and function(v)
       local on = (v ~= nil) and v or false
-      if smart and smart.toggle then smart.toggle(on) end
+      if smart and smart.toggle then pcall(smart.toggle, on) end
     end) or nil,
 
     -- Anti-AFK
@@ -117,17 +141,22 @@ function App.start()
       end
     end) or nil,
 
-    -- Merchants
+    -- Merchants (fixed: task.spawn + pcall)
     onToggleMerchant1 = (profile.ui.merchants and function(v)
       local on = (v ~= nil) and v or false
-      if merchants and merchants.autoBuyLoop and on then
-        task.spawn(function() merchants.autoBuyLoop("SmelterMerchantService1", function() return on end, function() end) end)
+      if merchants and merchants.autoBuyLoop then
+        task.spawn(function()
+          pcall(merchants.autoBuyLoop, "SmelterMerchantService1", function() return on end, function() end)
+        end)
       end
     end) or nil,
+
     onToggleMerchant2 = (profile.ui.merchants and function(v)
       local on = (v ~= nil) and v or false
-      if merchants and merchants.autoBuyLoop and on then
-        task.spawn(function() merchants.autoBuyLoop("SmelterMerchantService2", function() return on end, function() end) end)
+      if merchants and merchants.autoBuyLoop then
+        task.spawn(function()
+          pcall(merchants.autoBuyLoop, "SmelterMerchantService2", function() return on end, function() end)
+        end)
       end
     end) or nil,
 
@@ -139,56 +168,59 @@ function App.start()
       end
     end) or nil,
 
+    -- Redeem
     onRedeemCodes = (profile.ui.redeemCodes and function()
       if redeem and redeem.run then task.spawn(function() redeem.run({dryRun=false,concurrent=true,delayBetween=0.25}) end)
       else note("Codes","redeem_unredeemed_codes.lua missing",4) end
     end) or nil,
 
+    -- FastLevel (fixed: use auto-farm loop, no undefined call)
     onFastLevelToggle = (profile.ui.fastlevel and function(v)
-      local fastOn = (v ~= nil) and v or (not fastOn)
+      local fastOn = (v ~= nil) and v or false
       if fastOn then
         local sahurName = "Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Sarur"
         local list = { sahurName }
         pcall(function() if farm and farm.setSelected then farm.setSelected(list) end end)
         pcall(function() if farm and farm.setFastLevelEnabled then farm.setFastLevelEnabled(true) end end)
+        autoFarmOn = true
+        if farm and farm.setupAutoAttackRemote then pcall(farm.setupAutoAttackRemote) end
         if farm and farm.runAutoFarm then
-          task.spawn(function() farm.runAutoFarm(function() return fastOn end, App.UI and App.UI.setCurrentTarget) end)
+          autoFarmThread = task.spawn(function()
+            farm.runAutoFarm(function() return autoFarmOn end, App.UI and App.UI.setCurrentTarget)
+          end)
         end
         if App.UI and App.UI.setAutoFarm then pcall(App.UI.setAutoFarm, true) end
       else
         pcall(function() if farm and farm.setFastLevelEnabled then farm.setFastLevelEnabled(false) end end)
-        if App.UI and App.UI.setAutoFarm then pcall(App.UI.setAutoFarm, false) end
+        stopAutoFarm()  -- Use same stop
       end
     end) or nil,
 
-    -- 🔹 Private Server button — calls function defined by solo.lua
+    -- Sahur Hopper
+    onSahurHopperToggle = (profile.ui.sahurHopper and function(v)
+      if sahurHopper and sahurHopper.enable then
+        if v then sahurHopper.enable() else sahurHopper.disable() end
+      end
+    end) or nil,
+
+    -- Private Server
     onPrivateServer = (profile.ui.privateServer and function()
       task.spawn(function()
         local f = rawget(_G, "TeleportToPrivateServer")
         if type(f) ~= "function" then
-          note("🌲 Private Server", "Run solo.lua first to set up the function!", 4)
+          note("🌲 Private Server", "Run solo.lua first!", 4)
           return
         end
         local ok, err = pcall(f)
         if ok then
-          note("🌲 Private Server", "Teleport initiated to private server!", 3)
+          note("🌲 Private Server", "Teleport initiated!", 3)
         else
-          note("🌲 Private Server", "Failed to teleport: " .. tostring(err), 5)
+          note("🌲 Private Server", "Failed: " .. tostring(err), 5)
         end
       end)
     end) or nil,
 
-    -- 🔹 New Server Hopper toggle
-    onServerHopperToggle = (profile.ui.serverHopper and function(v)
-      local on = (v ~= nil) and v or false
-      if on and serverHopper then
-        task.spawn(function()
-          serverHopper.hopToDifferentServer()  -- Call the hopper function
-        end)
-      end
-    end) or nil,
-
-    -- (optional) Dungeon hooks
+    -- Dungeon
     onDungeonAutoToggle = (profile.ui.dungeonAuto and function(v)
       local on = (v ~= nil) and v or false
       if dungeonBE and dungeonBE.init and dungeonBE.setAuto then
