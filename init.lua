@@ -3,6 +3,9 @@
 
 local BASE = "https://raw.githubusercontent.com/HiddenSquidHiding/TheHUB/main/"
 
+local src = game:HttpGet(_G.WOODZ_BASE_URL .. "data_monsters.lua")
+local f = loadstring(src); _G.WOODZ_DATA_MONSTERS = f()
+
 -- Simple fetch with retry
 local function fetch(url)
   local ok, res = pcall(game.HttpGet, game, url)
