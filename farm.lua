@@ -218,17 +218,66 @@ end
 ----------------------------------------------------------------------
 -- Auto-attack remote setup
 ----------------------------------------------------------------------
-local autoAttackRemote
+-- Remote setup (dynamic scan for Brainrot Evolution compatibility)
+local autoAttackRemote = nil
 function M.setupAutoAttackRemote()
-  local remotes = ReplicatedStorage:WaitForChild("Remotes", 5)
-  if not remotes then
-    utils.notify("🌲 Auto-Farm", "Remotes folder not found.", 5)
+  autoAttackRemote = nil
+  print("[farm.lua] Scanning for attack remote in ReplicatedStorage...")
+  local foundRemotes = {}
+  for _, obj in ipairs(ReplicatedStorage:GetDescendants()) do
+    if obj:IsA("RemoteFunction") or obj:IsA("RemoteEvent") then
+      table.insert(foundRemotes, obj:GetFullName())
+      print("[farm.lua] Found remote:", obj:GetFullName())
+    end
+  end
+  if #foundRemotes == 0 then
+    print("[farm.lua] No remotes found—using teleport fallback.")
+    utils.notify("🌲 Auto-Farm", "No attack remote found; teleporting to targets for proximity damage.", 5)
     return
   end
-  autoAttackRemote = remotes:WaitForChild("RequestAttack", 5)
-  if not autoAttackRemote then
-    utils.notify("🌲 Auto-Farm", "RequestAttack RemoteFunction not found.", 5)
+
+  -- Try exact path first (your original, but with common variants)
+  local possiblePaths = {
+    "Packages.Knit.Services.MonsterService.Client.RequestAttack",
+    "Packages.Knit.Services.MonsterService.Remotes.RequestAttack",
+    "Packages.Knit.Services.MonsterService.RF.RequestAttack",  -- Original
+    "Remotes.MonsterService.RequestAttack",
+    "Packages.Knit.Services.CombatService.RequestAttack",
+  }
+  for _, path in ipairs(possiblePaths) do
+    local success, remote = pcall(function()
+      local parts = string.split(path, ".")
+      local current = ReplicatedStorage
+      for _, part in ipairs(parts) do
+        current = current:WaitForChild(part, 2)  -- Short timeout
+      end
+      return current
+    end)
+    if success and (remote:IsA("RemoteFunction") or remote:IsA("RemoteEvent")) then
+      autoAttackRemote = remote
+      print("[farm.lua] Using remote via path:", path)
+      utils.notify("🌲 Auto-Farm", ("Attack remote found: %s"):format(remote.Name), 3)
+      return
+    end
   end
+
+  -- Fallback: Keyword match (e.g., anything with "Attack" or "Damage")
+  local keywords = {"Attack", "Damage", "Hit", "Monster", "Combat"}
+  for _, obj in ipairs(ReplicatedStorage:GetDescendants()) do
+    if (obj:IsA("RemoteFunction") or obj:IsA("RemoteEvent")) then
+      local nameLower = obj.Name:lower()
+      for _, kw in ipairs(keywords) do
+        if string.find(nameLower, kw:lower()) then
+          autoAttackRemote = obj
+          print("[farm.lua] Using keyword-matched remote:", obj:GetFullName())
+          utils.notify("🌲 Auto-Farm", ("Matched remote: %s"):format(obj.Name), 3)
+          return
+        end
+      end
+    end
+  end
+
+  utils.notify("🌲 Auto-Farm", "No matching remote; using teleport fallback.", 5)
 end
 
 ----------------------------------------------------------------------
