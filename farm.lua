@@ -256,7 +256,7 @@ local function zeroVel(part)
 end
 
 local function isValidCFrame(cf)
-  return cf and cf:IsA("CFrame") and cf.Position.Magnitude < math.huge
+  return cf and cf.Position.Magnitude < math.huge
 end
 
 local function findBasePart(model)
@@ -340,7 +340,7 @@ local function estimateTTK(enemy, probeTime)
 end
 
 ----------------------------------------------------------------------
--- Engagement (enter/restore) helpers
+-- Engagement (enter/restore) helpers (fixed: no IsA on CFrame)
 ----------------------------------------------------------------------
 local function calcHoverCF(enemy)
   local part = enemy:FindFirstChild("HumanoidRootPart") or findBasePart(enemy)
