@@ -72,7 +72,7 @@ function M.build(opts)
   end
 
   if f.privateServer then
-    OptionsTab:CreateButton({
+    Options:CreateButton({
     Name = "Private Server",
     Callback = function()
       task.spawn(function()
