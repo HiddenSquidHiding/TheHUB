@@ -71,6 +71,25 @@ function M.build(opts)
     })
   end
 
+  if f.privateServer then
+    OptionsTab:CreateButton({
+    Name = "Private Server",
+    Callback = function()
+      task.spawn(function()
+        if not _G.TeleportToPrivateServer then
+          utils.notify("🌲 Private Server", "Run solo.lua first to set up the function!", 4)
+          return
+        end
+        local success, err = pcall(_G.TeleportToPrivateServer)
+        if success then
+          utils.notify("🌲 Private Server", "Teleport initiated to private server!", 3)
+        else
+          utils.notify("🌲 Private Server", "Failed to teleport: " .. tostring(err), 5)
+        end
+      end)
+    end,
+  })
+
   utils.notify("🌲 WoodzHUB", "Rayfield UI loaded.", 3)
 
   local api = {
