@@ -1,15 +1,70 @@
 -- crates.lua
 -- Crates inventory + auto-open loop
 
--- 🔧 Safe utils access
-local function getUtils()
-  local p = script and script.Parent
-  if p and p._deps and p._deps.utils then return p._deps.utils end
-  if rawget(getfenv(), "__WOODZ_UTILS") then return __WOODZ_UTILS end
-  error("[crates.lua] utils missing; ensure init.lua injects siblings._deps.utils before loading crates.lua")
+-- 🔐 UNIVERSAL SAFE HEADER (drop-in)
+local function _safeUtils()
+  -- 1) prefer an injected utils (from loader/app)
+  local env = (getfenv and getfenv()) or _G
+  if env and type(env.__WOODZ_UTILS) == "table" then return env.__WOODZ_UTILS end
+  if _G and type(_G.__WOODZ_UTILS) == "table" then return _G.__WOODZ_UTILS end
+
+  -- 2) last-resort shim that never errors
+  local StarterGui = game:GetService("StarterGui")
+  local Players    = game:GetService("Players")
+
+  local function notify(title, msg, dur)
+    dur = dur or 3
+    pcall(function()
+      StarterGui:SetCore("SendNotification", {
+        Title = tostring(title or "WoodzHUB"),
+        Text  = tostring(msg or ""),
+        Duration = dur,
+      })
+    end)
+    print(("[%s] %s"):format(tostring(title or "WoodzHUB"), tostring(msg or "")))
+  end
+
+  local function waitForCharacter()
+    local plr = Players.LocalPlayer
+    while plr
+      and (not plr.Character
+           or not plr.Character:FindFirstChild("HumanoidRootPart")
+           or not plr.Character:FindFirstChildOfClass("Humanoid")) do
+      plr.CharacterAdded:Wait()
+      task.wait()
+    end
+    return plr and plr.Character
+  end
+
+  return { notify = notify, waitForCharacter = waitForCharacter }
 end
 
+local function getUtils() return _safeUtils() end
 local utils = getUtils()
+
+-- ✅ Safe sibling require helper (works even when script.Parent is nil)
+-- Use this ONLY when you need to pull another local module; otherwise omit.
+local function safeRequireSibling(name, defaultValue)
+  -- 1) If loader provides a global hook, try it
+  local env = (getfenv and getfenv()) or _G
+  local hook = env and env.__WOODZ_REQUIRE
+  if type(hook) == "function" then
+    local ok, mod = pcall(hook, name)
+    if ok and mod ~= nil then return mod end
+  end
+  -- 2) Try finding an actual ModuleScript already present in memory
+  if getloadedmodules then
+    for _, m in ipairs(getloadedmodules()) do
+      if typeof(m) == "Instance" and m:IsA("ModuleScript") and m.Name == name then
+        local ok, mod = pcall(require, m)
+        if ok then return mod end
+      end
+    end
+  end
+  -- 3) Couldn’t load -> fall back
+  return defaultValue
+end
+
 local ReplicatedStorage = game:GetService('ReplicatedStorage')
 
 -- Internal state
