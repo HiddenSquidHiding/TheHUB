@@ -8,7 +8,9 @@ local player = Players.LocalPlayer
 local placeId = game.PlaceId
 local currentJobId = game.JobId
 
-local function hopToDifferentServer()
+local M = {}
+
+function M.hopToDifferentServer()
   local url = "https://games.roblox.com/v1/games/" .. placeId .. "/servers/Public?sortOrder=Asc&limit=100"
   local success, response = pcall(function()
     return HttpService:JSONDecode(game:HttpGet(url))
@@ -17,7 +19,7 @@ local function hopToDifferentServer()
   if not success or not response.data or #response.data == 0 then
     warn("[Server Hopper] Failed to fetch public servers. Retrying in 5s...")
     task.wait(5)
-    hopToDifferentServer()  -- Retry
+    M.hopToDifferentServer()  -- Retry
     return
   end
 
@@ -31,7 +33,7 @@ local function hopToDifferentServer()
   if #availableJobIds == 0 then
     warn("[Server Hopper] No other public servers found. Retrying in 5s...")
     task.wait(5)
-    hopToDifferentServer()  -- Retry
+    M.hopToDifferentServer()  -- Retry
     return
   end
 
@@ -43,11 +45,10 @@ local function hopToDifferentServer()
   if not ok then
     warn("[Server Hopper] Teleport failed: " .. tostring(err) .. ". Retrying in 5s...")
     task.wait(5)
-    hopToDifferentServer()  -- Retry on failure
+    M.hopToDifferentServer()  -- Retry on failure
   else
     print("[Server Hopper] Successfully teleported to new server: " .. selectedJobId)
   end
 end
 
--- Execute the hop (can be triggered manually or via UI button)
-hopToDifferentServer()
+return M
