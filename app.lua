@@ -2,7 +2,7 @@
 -- Requires: _G.WOODZHUB_BASE = "https://raw.githubusercontent.com/<user>/<repo>/<branch>/"
 
 local TAG = "[WoodzHUB]"
-local BASE = (_G.WOODZHUB_BASE or "") .. ""
+local BASE = (_G.WOODZHUB_BASE or "https://raw.githubusercontent.com/HiddenSquidHiding/TheHUB/main/") .. ""
 assert(type(BASE) == "string" and #BASE > 0, TAG .. " _G.WOODZHUB_BASE not set")
 if string.sub(BASE, -1) ~= "/" then BASE = BASE .. "/" end
 
