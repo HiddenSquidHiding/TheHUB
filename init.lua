@@ -63,6 +63,8 @@ for _, fname in ipairs(WANT) do
   local ok, src = pcall(httpGet, url)
   if ok and type(src) == "string" and #src > 0 then
     sources[fname] = src
+  else
+    warn(("[loader] Failed to fetch %s from %s"):format(fname, url))
   end
 end
 
@@ -93,12 +95,18 @@ local siblings = {
 
 local function shimRequire(name)
   local key = normalize(name)
-  assert(key, ("[loader] require(%s) not found next to init (check file name)"):format(tostring(name)))
+  if not key then
+    warn(("[loader] require(%s) not found (missing from sources)"):format(tostring(name)))
+    return nil
+  end
   if moduleCache[key] ~= nil then return moduleCache[key] end
 
   local chunkSrc = sources[key]
   local chunk, err = loadstring(chunkSrc, "=" .. key)
-  assert(chunk, ("[loader] compile failed for %s: %s"):format(key, tostring(err)))
+  if not chunk then
+    warn(("[loader] compile failed for %s: %s"):format(key, tostring(err)))
+    return nil
+  end
 
   local function localRequire(childName) return shimRequire(childName) end
   local env = makeEnv(key, localRequire, siblings)
@@ -107,12 +115,18 @@ local function shimRequire(name)
   setfenv(chunk, env)
 
   local ok, ret = pcall(chunk)
-  assert(ok, ("[loader] runtime error for %s: %s"):format(key, tostring(ret)))
+  if not ok then
+    warn(("[loader] runtime error for %s: %s"):format(key, tostring(ret)))
+    return nil
+  end
 
   moduleCache[key] = ret
   siblings[key:gsub("%.lua$","")] = ret -- allow script.Parent.ui_rayfield style
   return ret
 end
+
+-- 🔹 FIX: Expose the shim as global so app.lua's r() works
+_G.__WOODZ_REQUIRE = shimRequire
 
 ----------------------------------------------------------------------
 -- Boot app.lua
