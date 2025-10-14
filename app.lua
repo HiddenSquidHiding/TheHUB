@@ -74,16 +74,16 @@ end
 
 local App = {}
 
--- Shared state for farm loops
+-- Shared state for farm loops (fixed: proper stop/start)
 local autoFarmOn = false
-local autoFarmConnection = nil
+local autoFarmThread = nil
 
 local function stopAutoFarm()
   autoFarmOn = false
-  if autoFarmConnection then
-    autoFarmConnection:Disconnect()
-    autoFarmConnection = nil
+  if autoFarmThread then
+    autoFarmThread = nil  -- Let flag stop it
   end
+  print("[app.lua] Auto-Farm stopped")
 end
 
 function App.start()
@@ -106,19 +106,22 @@ function App.start()
     picker_setSelected = (farm and farm.setSelected) or (smart and smart.setSelected),
     picker_clear = (farm and function() farm.setSelected({}) end) or (smart and smart.clear),
 
-    -- Farm toggles (fixed: shared state, stop old loop)
+    -- Farm toggles (fixed: sync UI, debug print, proper thread stop)
     onAutoFarmToggle = (profile.ui.autoFarm and function(v)
-      autoFarmOn = (v ~= nil) and v or not autoFarmOn
-      stopAutoFarm()  -- Stop previous
-      if autoFarmOn and farm and farm.setupAutoAttackRemote then
-        farm.setupAutoAttackRemote()
+      local newOn = (v ~= nil) and v or not autoFarmOn
+      print("[app.lua] Auto-Farm toggle:", newOn)  -- Debug
+      stopAutoFarm()
+      autoFarmOn = newOn
+      if newOn and farm then
+        if farm.setupAutoAttackRemote then pcall(farm.setupAutoAttackRemote) end
+        if farm.runAutoFarm then
+          autoFarmThread = task.spawn(function()
+            farm.runAutoFarm(function() return autoFarmOn end, App.UI and App.UI.setCurrentTarget)
+          end)
+        end
       end
-      if autoFarmOn and farm and farm.runAutoFarm then
-        task.spawn(function()
-          farm.runAutoFarm(function() return autoFarmOn end, App.UI and App.UI.setCurrentTarget)
-        end)
-      end
-      if App.UI and App.UI.setAutoFarm then pcall(App.UI.setAutoFarm, autoFarmOn) end
+      -- Sync UI toggle
+      if App.UI and App.UI.setAutoFarm then pcall(App.UI.setAutoFarm, newOn) end
     end) or nil,
 
     onSmartFarmToggle = (profile.ui.smartFarm and function(v)
@@ -134,18 +137,18 @@ function App.start()
       end
     end) or nil,
 
-    -- Merchants (fixed: pcall remote)
+    -- Merchants (fixed: pcall, no loop if missing)
     onToggleMerchant1 = (profile.ui.merchants and function(v)
       local on = (v ~= nil) and v or false
       if on and merchants and merchants.autoBuyLoop then
-        task.spawn(function() merchants.autoBuyLoop("SmelterMerchantService1", function() return on end, function() end) end)
+        pcall(merchants.autoBuyLoop, "SmelterMerchantService1", function() return on end, function() end)
       end
     end) or nil,
 
     onToggleMerchant2 = (profile.ui.merchants and function(v)
       local on = (v ~= nil) and v or false
       if on and merchants and merchants.autoBuyLoop then
-        task.spawn(function() merchants.autoBuyLoop("SmelterMerchantService2", function() return on end, function() end) end)
+        pcall(merchants.autoBuyLoop, "SmelterMerchantService2", function() return on end, function() end)
       end
     end) or nil,
 
@@ -163,7 +166,7 @@ function App.start()
       else note("Codes","redeem_unredeemed_codes.lua missing",4) end
     end) or nil,
 
-    -- FastLevel (fixed: local state, pcall undefined)
+    -- FastLevel (fixed: local state, pcall)
     onFastLevelToggle = (profile.ui.fastlevel and function(v)
       local fastOn = (v ~= nil) and v or false
       if fastOn then
@@ -173,8 +176,7 @@ function App.start()
         pcall(function() if farm and farm.setFastLevelEnabled then farm.setFastLevelEnabled(true) end end)
         autoFarmOn = true
         pcall(function() if App.UI and App.UI.setAutoFarm then App.UI.setAutoFarm(true) end end)
-        -- pcall undefined startAutoFarmLoop if exists
-        pcall(startAutoFarmLoop)
+        pcall(startAutoFarmLoop)  -- pcall if undefined
       else
         pcall(function() if farm and farm.setFastLevelEnabled then farm.setFastLevelEnabled(false) end end)
         autoFarmOn = false
