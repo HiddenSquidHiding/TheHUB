@@ -22,7 +22,8 @@ local WANT = {
   "constants.lua",
   "data_monsters.lua",
   "solo.lua",
-  "sahur_hopper.lua",  -- Sahur server hopper
+  "sahur_hopper.lua",
+  "server_hopper.lua",  -- Added for server hopping
 }
 
 ----------------------------------------------------------------------
