@@ -36,7 +36,6 @@ function M.build(h)
 
   local currentSearch = ""
 
-  -- helper to pull options from app (farm wrapper)
   local function getOptions()
     if h.picker_getOptions then
       local ok, list = pcall(h.picker_getOptions, currentSearch)
@@ -58,18 +57,13 @@ function M.build(h)
   end
 
   local dropdown
-  -- live refresh
   local function refreshDropdown()
     if not dropdown then return end
     local options = getOptions()
     local ok = pcall(function() dropdown:Refresh(options, true) end)
-    if not ok then
-      -- some forks lack Refresh; fall back to Set (resets selection)
-      pcall(function() dropdown:Set(options) end)
-    end
+    if not ok then pcall(function() dropdown:Set(options) end) end
   end
 
-  -- search box (updates live)
   Main:CreateInput({
     Name = "Search Models",
     PlaceholderText = "Type to filter…",
@@ -86,7 +80,6 @@ function M.build(h)
     CurrentOption = getSelected(),
     MultipleOptions = true,
     Callback = function(selection)
-      -- normalize Rayfield’s selection shape(s)
       local out = {}
       if typeof(selection) == "table" then
         for _, v in ipairs(selection) do if typeof(v) == "string" then table.insert(out, v) end end
@@ -101,13 +94,12 @@ function M.build(h)
     Name = "Clear All Selections",
     Callback = function()
       if h.picker_clear then pcall(h.picker_clear) end
-      -- also clear UI
       pcall(function() dropdown:Set({}) end)
     end,
   })
 
   ------------------------------------------------------------------
-  -- Farming toggles + current target
+  -- Farming
   ------------------------------------------------------------------
   Main:CreateSection("Farming")
 
@@ -154,6 +146,13 @@ function M.build(h)
   if h.onFastLevelToggle then
     Options:CreateToggle({ Name="Instant Level 70+ (Sahur only)", CurrentValue=false, Callback=function(v) h.onFastLevelToggle(v) end })
   end
+
+  -- 🔹 Private Server button (uses solo.lua -> _G.TeleportToPrivateServer)
+  if h.onPrivateServer then
+    Options:CreateButton({ Name = "Private Server", Callback = function() h.onPrivateServer() end })
+  end
+
+  -- Dungeon toggles (if provided)
   if h.onDungeonAutoToggle then
     Options:CreateToggle({ Name="Dungeon Auto-Attack", CurrentValue=false, Callback=function(v) h.onDungeonAutoToggle(v) end })
   end
@@ -161,7 +160,7 @@ function M.build(h)
     Options:CreateToggle({ Name="Dungeon Auto-Replay", CurrentValue=false, Callback=function(v) h.onDungeonReplayToggle(v) end })
   end
 
-  -- exposed helpers for app.lua
+  -- exposed helpers
   M.setCurrentTarget = function(text) pcall(function() lbl:Set(text or "Current Target: None") end) end
   M.destroy = function() pcall(function() Rayfield:Destroy() end) end
 
