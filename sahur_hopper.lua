@@ -26,19 +26,19 @@ local function getMyLevel()
   local ls = player:FindFirstChild("leaderstats")
   if ls then
     local lvl = ls:FindFirstChild("Level")
-    return lvl and lvl.Value or 0
+    return lvl and tonumber(lvl.Value) or 0
   end
   return 0
 end
 
--- Check if any other player > L84
+-- Check if any other player > L84 (fixed: tonumber on Value)
 local function hasHighLevelPlayers()
   for _, plr in ipairs(Players:GetPlayers()) do
     if plr ~= player then
       local ls = plr:FindFirstChild("leaderstats")
       if ls then
         local lvl = ls:FindFirstChild("Level")
-        if lvl and lvl.Value > 84 then
+        if lvl and tonumber(lvl.Value) > 84 then
           return true
         end
       end
@@ -64,7 +64,7 @@ local function farmSahur()
     return false
   end
 
-  -- 🔹 FIX: Setup remote before farming
+  -- Setup remote before farming
   pcall(f.setupAutoAttackRemote)
 
   -- Set target to Sahur
