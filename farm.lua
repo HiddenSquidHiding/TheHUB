@@ -269,39 +269,35 @@ local function findBasePart(model)
 end
 
 ----------------------------------------------------------------------
--- Smooth follow constraint maker
+-- Smooth follow constraint maker (fixed: OneAttachment mode, no dummy)
 ----------------------------------------------------------------------
-local function makeSmoothFollow(targetPart)
+local function makeSmoothFollow(hrp)
   local character = player.Character
-  if not character or not targetPart then return nil end
-  local hrp = character:FindFirstChild("HumanoidRootPart")
-  if not hrp then return nil end
+  if not character or not hrp then return nil end
 
   local att0 = Instance.new("Attachment")
   att0.Parent = hrp
 
-  local dummyAtt = Instance.new("Attachment")
-  dummyAtt.Parent = hrp.Parent  -- in character
-
   local posConstraint = Instance.new("AlignPosition")
   posConstraint.Attachment0 = att0
-  posConstraint.Attachment1 = dummyAtt
-  posConstraint.RigidityEnabled = false
+  posConstraint.Mode = Enum.PositionAlignmentMode.OneAttachment
   posConstraint.MaxForce = POS_MAX_FORCE
   posConstraint.Responsiveness = POS_RESPONSIVENESS
+  posConstraint.RigidityEnabled = false
   posConstraint.Parent = hrp
 
   local oriConstraint = Instance.new("AlignOrientation")
   oriConstraint.Attachment0 = att0
-  oriConstraint.Attachment1 = dummyAtt
-  oriConstraint.RigidityEnabled = false
+  oriConstraint.Mode = Enum.OrientationAlignmentMode.OneAttachment
   oriConstraint.MaxTorque = ORI_MAX_TORQUE
   oriConstraint.Responsiveness = ORI_RESPONSIVENESS
+  oriConstraint.RigidityEnabled = false
   oriConstraint.Parent = hrp
 
   local function setGoal(cf)
-    if dummyAtt and isValidCFrame(cf) then
-      dummyAtt.CFrame = cf
+    if isValidCFrame(cf) then
+      posConstraint.Position = cf.Position
+      oriConstraint.CFrame = cf
     end
   end
 
@@ -310,7 +306,6 @@ local function makeSmoothFollow(targetPart)
       posConstraint:Destroy()
       oriConstraint:Destroy()
       att0:Destroy()
-      dummyAtt:Destroy()
     end)
   end
 
