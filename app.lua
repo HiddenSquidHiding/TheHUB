@@ -24,6 +24,7 @@ _G.__WOODZ_UTILS = _G.__WOODZ_UTILS or {
 }
 local function note(t, m, d) _G.__WOODZ_UTILS.notify(t, m, d or 3) end
 
+-- Small fetcher your init.lua should have set as _G.__WOODZ_REQUIRE (HTTP loader).
 local function r(name)
   local hook = rawget(_G, "__WOODZ_REQUIRE")
   if type(hook) ~= "function" then return nil end
@@ -31,6 +32,7 @@ local function r(name)
   return ok and mod or nil
 end
 
+-- Optional modules (loaded if present)
 local UI        = r("ui_rayfield")
 local gamesCfg  = r("games")
 local farm      = r("farm")
@@ -42,6 +44,11 @@ local redeem    = r("redeem_unredeemed_codes")
 local fastlevel = r("fastlevel")
 local dungeonBE = r("dungeon_be")
 
+-- 🔹 NEW: load solo.lua at boot so the Private Server button can call it later.
+-- IMPORTANT: your solo.lua must NOT teleport on load; it should only define _G.TeleportToPrivateServer.
+local _solo = r("solo")  -- ignore return; we just want its side-effect (define the function)
+
+-- Pick a profile from games.lua
 local function profileFromGames()
   local default = {
     name = "Generic",
@@ -49,7 +56,7 @@ local function profileFromGames()
       modelPicker = true, currentTarget = true,
       autoFarm = true, smartFarm = false,
       merchants = false, crates = false, antiAFK = true,
-      redeemCodes = true, fastlevel = true, privateServer = true, -- enable by default
+      redeemCodes = true, fastlevel = true, privateServer = true, -- keep on
       dungeonAuto = false, dungeonReplay = false,
     },
   }
@@ -91,6 +98,7 @@ function App.start()
     if App.UI and App.UI.setCurrentTarget then pcall(App.UI.setCurrentTarget, s) end
   end
 
+  -- Picker adapters for UI
   local function picker_fetch(searchText)
     if not farm then return {} end
     if type(farm.filterMonsterModels) == "function" then
@@ -137,6 +145,7 @@ function App.start()
     end)
   end
 
+  -- Build UI
   App.UI = UI.build({
     picker_getOptions = picker_fetch,
     picker_getSelected = picker_getSelected,
@@ -208,7 +217,7 @@ function App.start()
       end
     end) or nil,
 
-    -- 🔹 Private Server button handler
+    -- 🔹 Private Server button — calls function defined by solo.lua
     onPrivateServer = (profile.ui.privateServer and function()
       task.spawn(function()
         local f = rawget(_G, "TeleportToPrivateServer")
@@ -225,7 +234,7 @@ function App.start()
       end)
     end) or nil,
 
-    -- (optional) Dungeon hooks if you enable them in games.lua
+    -- (optional) Dungeon hooks
     onDungeonAutoToggle = (profile.ui.dungeonAuto and function(v)
       local on = (v ~= nil) and v or false
       if dungeonBE and dungeonBE.init and dungeonBE.setAuto then
