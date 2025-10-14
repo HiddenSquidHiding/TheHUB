@@ -10,7 +10,9 @@ local function loop()
     while M._enabled do
       pcall(function()
         VirtualUser:CaptureController()
-        VirtualUser:SetKeyDown("W"); task.wait(0.1); VirtualUser:SetKeyUp("W")
+        VirtualUser:SetKeyDown(Enum.KeyCode.W)
+        task.wait(0.1)
+        VirtualUser:SetKeyUp(Enum.KeyCode.W)
       end)
       task.wait(60)
     end
