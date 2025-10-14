@@ -1,18 +1,50 @@
--- app.lua
--- Single-boot loader that fetches modules (HTTP) and builds the Rayfield UI exactly once.
+-- app.lua  • WoodzHUB bootstrap (GitHub raw loader + Rayfield UI)
+-- Requires: _G.WOODZHUB_BASE = "https://raw.githubusercontent.com/<user>/<repo>/<branch>/"
 
 local TAG = "[WoodzHUB]"
-
--- ---------------- basics & helpers ----------------
-local HttpService = game:GetService("HttpService")
+local BASE = (_G.WOODZHUB_BASE or "") .. ""
+assert(type(BASE) == "string" and #BASE > 0, TAG .. " _G.WOODZHUB_BASE not set")
+if string.sub(BASE, -1) ~= "/" then BASE = BASE .. "/" end
 
 local function log(...) print(TAG, ...) end
 local function warnf(...) warn(TAG, ...) end
 
--- Minimal utils given to modules
-__WOODZ_UTILS = __WOODZ_UTILS or {
+-- ---------------------- HTTP loader ----------------------
+local function http_get(path)
+  local url = BASE .. path
+  local ok, res = pcall(game.HttpGet, game, url, true)
+  if not ok then
+    warnf(("[loader] GET failed %s -> %s"):format(url, tostring(res)))
+    return nil, url, res
+  end
+  return res, url
+end
+
+local function load_remote(path, required)
+  local src, url, err = http_get(path)
+  if not src then
+    if required then warnf(("required file missing: %s (%s)"):format(path, tostring(err)))
+    else warnf(("optional file missing: %s"):format(path)) end
+    return nil
+  end
+  local chunk, lerr = loadstring(src, "=" .. path)
+  if not chunk then
+    warnf(("loadstring failed for %s: %s"):format(path, tostring(lerr)))
+    return nil
+  end
+  local ok, ret = pcall(chunk)
+  if not ok then
+    warnf(("runtime error for %s: %s"):format(path, tostring(ret)))
+    return nil
+  end
+  return ret
+end
+
+-- ---------------------- utils (very small) ----------------------
+local utils = {
   notify = function(title, msg, dur)
-    warn(("[%s] %s"):format(title or TAG, msg or ""))
+    dur = dur or 3
+    print(("[%s] %s"):format(title, msg))
   end,
   waitForCharacter = function()
     local Players = game:GetService("Players")
@@ -27,151 +59,133 @@ __WOODZ_UTILS = __WOODZ_UTILS or {
     end
   end,
 }
+_G.__WOODZ_UTILS = utils -- make available to modules
 
--- ---------------- remote loader ----------------
-local BASE = _G.WOODZHUB_BASE or "https://raw.githubusercontent.com/HiddenSquidHiding/TheHUB/main/"
-
-local function fetchText(url)
-  local ok, res = pcall(game.HttpGet, game, url)
-  if ok and type(res) == "string" and #res > 0 then return res end
-  return nil, res
-end
-
-local function fetchModule(name)
-  local url = BASE .. name .. ".lua"
-  local src, err = fetchText(url)
-  if not src then return nil, ("HTTP get failed for %s: %s"):format(name, tostring(err)) end
-  local chunk, lerr = loadstring(src, "="..name)
-  if not chunk then return nil, ("compile failed for %s: %s"):format(name, tostring(lerr)) end
-  -- Give modules access to siblings via a synthetic environment
-  local env = getfenv()
-  env.__WOODZ_UTILS = __WOODZ_UTILS
-  setfenv(chunk, env)
-  local ok, ret = pcall(chunk)
-  if not ok then return nil, ("runtime error for %s: %s"):format(name, tostring(ret)) end
-  return ret
-end
-
-local function tryRequire(name, optional)
-  local mod, err = fetchModule(name)
-  if not mod then
-    if optional then
-      warnf(("[app.lua] optional module '%s' not available: %s"):format(name, err))
-      return nil
-    else
-      error(("[app.lua] required module '%s' failed: %s"):format(name, err))
-    end
+-- ---------------------- games profile ----------------------
+local function loadGames()
+  local cfg = load_remote("games.lua", false)
+  if type(cfg) ~= "table" then
+    warnf("[app.lua] games.lua missing or invalid; falling back to default")
+    cfg = {
+      default = {
+        name = "Generic",
+        modules = { "ui_rayfield", "anti_afk" },
+        ui = {
+          modelPicker=false,currentTarget=false,autoFarm=false,smartFarm=false,
+          merchants=false,crates=false,antiAFK=true,redeemCodes=false,
+          fastlevel=false,privateServer=false,dungeon=false
+        }
+      }
+    }
   end
+  return cfg
+end
+
+local function pickProfile(cfg)
+  local placeKey = "place:" .. tostring(game.PlaceId)
+  if cfg[placeKey] then return placeKey, cfg[placeKey] end
+  local uniKey = "universe:" .. tostring(game.GameId)
+  if cfg[uniKey] then return uniKey, cfg[uniKey] end
+  return "default", cfg.default
+end
+
+-- ---------------------- Module cache ----------------------
+local loaded = {}
+local function try_mod(name)
+  if loaded[name] ~= nil then return loaded[name] end
+  local mod = load_remote(name .. ".lua", false)
+  if not mod then
+    warnf(("optional module '%s' not available"):format(name))
+    loaded[name] = false
+    return nil
+  end
+  loaded[name] = mod
   return mod
 end
 
--- ---------------- games profile ----------------
-local function loadGames()
-  local m, err = fetchModule("games")
-  if not m or type(m) ~= "table" then
-    warnf("[app.lua] games.lua missing or invalid; falling back to default")
-    return {
-      default = {
-        name = "Generic",
-        modules = { "anti_afk" },
-        ui = {
-          modelPicker=false, currentTarget=false,
-          autoFarm=false, smartFarm=false,
-          merchants=false, crates=false, antiAFK=true,
-          redeemCodes=false, fastlevel=false, privateServer=false,
-        },
-      },
-      ["place:111989938562194"] = { -- Brainrot Evolution (example)
-        name = "Brainrot Evolution",
-        modules = {
-          "ui_rayfield","anti_afk","farm","smart_target",
-          "merchants","crates","redeem_unredeemed_codes","fastlevel"
-        },
-        ui = {
-          modelPicker=true, currentTarget=true,
-          autoFarm=true, smartFarm=true,
-          merchants=true, crates=true, antiAFK=true,
-          redeemCodes=true, fastlevel=true, privateServer=true,
-        },
-      },
-      ["place:90608986169653"] = { -- Brainrot Dungeon (example)
-        name = "Brainrot Dungeon",
-        modules = { "ui_rayfield","dungeon_be","anti_afk" },
-        ui = {
-          modelPicker=false, currentTarget=false,
-          autoFarm=false, smartFarm=false,
-          merchants=false, crates=false, antiAFK=true,
-          redeemCodes=false, fastlevel=false, privateServer=false,
-        },
-      },
-    }
-  end
-  return m
-end
-
-local function chooseProfile(gamesTbl)
-  local placeKey = "place:"..tostring(game.PlaceId)
-  if gamesTbl[placeKey] then return gamesTbl[placeKey], placeKey end
-  local uniKey = tostring(game.GameId)
-  if gamesTbl[uniKey] then return gamesTbl[uniKey], uniKey end
-  return gamesTbl.default, "default"
-end
-
--- ---------------- boot ----------------
+-- ---------------------- Boot ----------------------
 local function start()
-  if _G.__WOODZ_BOOTED then
-    return
-  end
-  _G.__WOODZ_BOOTED = true
+  local cfg = loadGames()
+  local key, prof = pickProfile(cfg)
+  log(("profile: %s (key=%s)"):format(prof.name or "?", key))
 
-  local games = loadGames()
-  local profile, key = chooseProfile(games)
-  profile = profile or games.default
-  key = key or "default"
-
-  log(("profile: %s (key=%s)"):format(profile.name or "?", key))
-
-  -- Load requested modules
-  local loaded = {}
-  for _, name in ipairs(profile.modules or {}) do
-    local mod = tryRequire(name, true) -- optional: true (don’t hard-crash if missing)
-    if mod then loaded[name] = mod end
+  -- Load requested modules (soft)
+  for _, m in ipairs(prof.modules or {}) do
+    if not try_mod(m) then warnf(("module unavailable (skipped): %s"):format(m)) end
   end
 
-  -- Build Rayfield if present
-  local UI = nil
-  if loaded.ui_rayfield and type(loaded.ui_rayfield.build) == "function" then
-    UI = loaded.ui_rayfield.build({
-      onAutoFarmToggle  = function(v) if loaded.farm and loaded.farm.runAutoFarm then
-        if v then
-          loaded.farm.setupAutoAttackRemote()
-          task.spawn(function()
-            loaded.farm.runAutoFarm(function() return true end, function() end)
-          end)
+  -- UI (Rayfield)
+  local ui_mod = try_mod("ui_rayfield")
+  local RF = nil
+  if ui_mod and type(ui_mod.build) == "function" then
+    -- handlers we expose to UI
+    local anti_afk = try_mod("anti_afk")
+    local dungeon  = try_mod("dungeon_be")
+    local farm     = try_mod("farm")
+    local redeem   = try_mod("redeem_unredeemed_codes")
+
+    local state = {
+      afk=false, dungeonAuto=false, dungeonReplay=true,
+      autoFarm=false
+    }
+
+    local handlers = {
+      onToggleAntiAFK = function(v)
+        state.afk = not not v
+        if anti_afk then
+          if state.afk then anti_afk.enable() else anti_afk.disable() end
         end
-      end end,
+        utils.notify("🌲 Anti-AFK", state.afk and "enabled" or "disabled", 3)
+      end,
 
-      onSmartFarmToggle = function(v) end, -- wire as needed
-      onToggleMerchant1 = function(v) end,
-      onToggleMerchant2 = function(v) end,
-      onToggleCrates    = function(v) end,
-      onToggleAntiAFK   = function(v) if loaded.anti_afk then if v then loaded.anti_afk.enable() else loaded.anti_afk.disable() end end end,
-      onRedeemCodes     = function() if loaded.redeem_unredeemed_codes then pcall(function() loaded.redeem_unredeemed_codes.run({dryRun=false,concurrent=true,delayBetween=0.25}) end) end end,
-      onFastLevelToggle = function(v) end,
-      onClearAll        = function() if loaded.farm and loaded.farm.setSelected then loaded.farm.setSelected({}) end end,
+      onDungeonAuto = function(v)
+        state.dungeonAuto = not not v
+        if dungeon and dungeon.init then dungeon.init() end
+        if dungeon and dungeon.setAuto then dungeon.setAuto(state.dungeonAuto) end
+        utils.notify("🌲 Dungeon", state.dungeonAuto and "auto ON" or "auto OFF", 3)
+      end,
+
+      onDungeonReplay = function(v)
+        state.dungeonReplay = not not v
+        if dungeon and dungeon.setReplay then dungeon.setReplay(state.dungeonReplay) end
+        utils.notify("🌲 Dungeon", "Replay " .. (state.dungeonReplay and "ON" or "OFF"), 3)
+      end,
+
+      onRedeemCodes = function()
+        if redeem and redeem.run then
+          task.spawn(function()
+            local ok, err = pcall(function()
+              redeem.run({ dryRun=false, concurrent=true, delayBetween=0.25 })
+            end)
+            if not ok then utils.notify("Codes", "Redeem failed: "..tostring(err), 4) end
+          end)
+        else
+          utils.notify("Codes","redeem_unredeemed_codes.lua missing",3)
+        end
+      end,
+    }
+
+    RF = ui_mod.build({
+      handlers = handlers,
+      flags = prof.ui or {},
+      title = prof.name or "WoodzHUB",
     })
   else
-    warnf("[app.lua] ui_rayfield.lua missing - UI not loaded. Core still running.")
+    warnf("[ui_rayfield] Rayfield failed to load")
   end
 
-  -- If this is Brainrot Dungeon profile, initialize dungeon helper if present
-  if key == "place:90608986169653" and loaded.dungeon_be and type(loaded.dungeon_be.init) == "function" then
-    loaded.dungeon_be.init()
-    -- You can expose UI toggles if you decide to show any in Rayfield for this profile.
+  -- Auto-start dungeon if this profile wants it and UI didn’t add controls
+  if (prof.ui and prof.ui.dungeon) then
+    local dungeon = try_mod("dungeon_be")
+    if dungeon and dungeon.init then
+      dungeon.init()
+      -- don’t auto-run; user can toggle in UI
+    end
   end
 
   log("Ready")
 end
 
--- Export a start() so the executor’s “missing start()” message never appears.
-return { start = start }
+-- Expose start() for older bootstraps, then run it now
+_G.WOODZHUB_START = start
+start()
