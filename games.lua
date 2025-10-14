@@ -19,6 +19,7 @@ return {
       autoFarm=true, smartFarm=true,
       merchants=true, crates=true, antiAFK=true,
       redeemCodes=true, fastlevel=true, privateServer=true,
+      sahurHopper = true,
       dungeonAuto=false, dungeonReplay=false,
     },
   },
