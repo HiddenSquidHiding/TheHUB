@@ -1,103 +1,72 @@
--- ui_rayfield.lua  • Rayfield window + game-aware controls
+-- ui_rayfield.lua — minimal Rayfield wrapper with safe fallbacks
+local Players = game:GetService("Players")
 
-local utils = rawget(getfenv(), "__WOODZ_UTILS") or {
-  notify = function(_,_) end
-}
-
-local Rayfield = nil
-do
-  local ok, lib = pcall(function()
-    return loadstring(game:HttpGet("https://sirius.menu/rayfield"))()
-  end)
-  if ok then Rayfield = lib else warn("[ui_rayfield] could not fetch Rayfield:", lib) end
+local ok, Rayfield = pcall(function()
+  return loadstring(game:HttpGet("https://sirius.menu/rayfield"))()
+end)
+if not ok then
+  return { build = function() warn("[ui_rayfield] Rayfield failed to fetch"); return {
+    setCurrentTarget=function()end, setAutoFarm=function()end, setSmartFarm=function()end, destroy=function()end
+  } end }
 end
 
 local M = {}
 
-function M.build(opts)
-  opts = opts or {}
-  local h = opts.handlers or {}
-  local f = opts.flags or {}
-  local title = opts.title or "WoodzHUB"
-
-  if not Rayfield then
-    warn("[ui_rayfield] Rayfield failed to load")
-    return {
-      destroy=function() end,
-      setCurrentTarget=function() end,
-    }
-  end
-
+function M.build(h)
+  h = h or {}
   local Window = Rayfield:CreateWindow({
-    Name = "🌲 WoodzHUB — "..title,
+    Name = "🌲 WoodzHUB — Rayfield",
     LoadingTitle = "WoodzHUB",
-    LoadingSubtitle = "Rayfield",
-    ConfigurationSaving = { Enabled = false, FolderName = "WoodzHUB", FileName = "RF" },
+    LoadingSubtitle = "Rayfield UI",
+    ConfigurationSaving = { Enabled = false },
     KeySystem = false,
   })
 
   local Main    = Window:CreateTab("Main")
   local Options = Window:CreateTab("Options")
 
-  -- MAIN
-  if f.dungeon then
-    Main:CreateSection("Dungeon")
-    local togA = Main:CreateToggle({
-      Name = "Auto-Attack Dungeon",
-      CurrentValue = false,
-      Callback = function(v) if h.onDungeonAuto then h.onDungeonAuto(v) end end,
-    })
-    local togR = Main:CreateToggle({
-      Name = "Auto Replay",
-      CurrentValue = true,
-      Callback = function(v) if h.onDungeonReplay then h.onDungeonReplay(v) end end,
-    })
+  Main:CreateSection("Farming")
+  local lbl = Main:CreateLabel("Current Target: None")
+
+  if h.onAutoFarmToggle then
+    local tog = Main:CreateToggle({ Name="Auto-Farm", CurrentValue=false, Callback=function(v) h.onAutoFarmToggle(v) end })
+    M.setAutoFarm = function(v) pcall(function() tog:Set(v and true or false) end) end
+  end
+  if h.onSmartFarmToggle then
+    local tog = Main:CreateToggle({ Name="Smart Farm", CurrentValue=false, Callback=function(v) h.onSmartFarmToggle(v) end })
+    M.setSmartFarm = function(v) pcall(function() tog:Set(v and true or false) end) end
   end
 
-  -- OPTIONS
   Options:CreateSection("General")
-  if f.antiAFK ~= false then
-    Options:CreateToggle({
-      Name = "Anti-AFK",
-      CurrentValue = false,
-      Callback = function(v) if h.onToggleAntiAFK then h.onToggleAntiAFK(v) end end,
-    })
+  if h.onToggleAntiAFK then
+    Options:CreateToggle({ Name="Anti-AFK", CurrentValue=false, Callback=function(v) h.onToggleAntiAFK(v) end })
+  end
+  if h.onToggleMerchant1 then
+    Options:CreateToggle({ Name="Auto Buy Mythics (Chicleteiramania)", CurrentValue=false, Callback=function(v) h.onToggleMerchant1(v) end })
+  end
+  if h.onToggleMerchant2 then
+    Options:CreateToggle({ Name="Auto Buy Mythics (Bombardino Sewer)", CurrentValue=false, Callback=function(v) h.onToggleMerchant2(v) end })
+  end
+  if h.onToggleCrates then
+    Options:CreateToggle({ Name="Auto Open Crates", CurrentValue=false, Callback=function(v) h.onToggleCrates(v) end })
+  end
+  if h.onRedeemCodes then
+    Options:CreateButton({ Name="Redeem Unredeemed Codes", Callback=function() h.onRedeemCodes() end })
+  end
+  if h.onFastLevelToggle then
+    Options:CreateToggle({ Name="Instant Level 70+ (Sahur only)", CurrentValue=false, Callback=function(v) h.onFastLevelToggle(v) end })
+  end
+  if h.onDungeonAutoToggle then
+    Options:CreateToggle({ Name="Dungeon Auto-Attack", CurrentValue=false, Callback=function(v) h.onDungeonAutoToggle(v) end })
+  end
+  if h.onDungeonReplayToggle then
+    Options:CreateToggle({ Name="Dungeon Auto-Replay", CurrentValue=false, Callback=function(v) h.onDungeonReplayToggle(v) end })
   end
 
-  if f.redeemCodes then
-    Options:CreateButton({
-      Name = "Redeem Unredeemed Codes",
-      Callback = function() if h.onRedeemCodes then h.onRedeemCodes() end end,
-    })
-  end
+  M.setCurrentTarget = function(text) pcall(function() lbl:Set(text or "Current Target: None") end) end
+  M.destroy = function() pcall(function() Rayfield:Destroy() end) end
 
-  if f.privateServer then
-    Options:CreateButton({
-    Name = "Private Server",
-    Callback = function()
-      task.spawn(function()
-        if not _G.TeleportToPrivateServer then
-          utils.notify("🌲 Private Server", "Run solo.lua first to set up the function!", 4)
-          return
-        end
-        local success, err = pcall(_G.TeleportToPrivateServer)
-        if success then
-          utils.notify("🌲 Private Server", "Teleport initiated to private server!", 3)
-        else
-          utils.notify("🌲 Private Server", "Failed to teleport: " .. tostring(err), 5)
-        end
-      end)
-    end,
-  })
-end
-
-  utils.notify("🌲 WoodzHUB", "Rayfield UI loaded.", 3)
-
-  local api = {
-    destroy = function() pcall(function() Rayfield:Destroy() end) end,
-    setCurrentTarget = function(_) end,
-  }
-  return api
+  return M
 end
 
 return M
