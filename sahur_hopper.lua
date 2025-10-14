@@ -4,7 +4,6 @@
 
 local Players = game:GetService("Players")
 local TeleportService = game:GetService("TeleportService")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 
 local player = Players.LocalPlayer
@@ -12,14 +11,13 @@ local farm = nil  -- Loaded via require if available
 
 local M = { _enabled = false, running = false }
 
--- Load farm module if sibling
+-- Load farm module if sibling (fallback to global shim)
 local function getFarm()
   if farm then return farm end
-  local p = script and script.Parent
-  if p then
-    local ok, mod = pcall(require, p.farm)
-    if ok then farm = mod end
-  end
+  local ok, mod = pcall(function()
+    return _G.__WOODZ_REQUIRE("farm")
+  end)
+  if ok and mod then farm = mod end
   return farm
 end
 
@@ -35,7 +33,6 @@ end
 
 -- Check if any other player > L84
 local function hasHighLevelPlayers()
-  local myLvl = getMyLevel()
   for _, plr in ipairs(Players:GetPlayers()) do
     if plr ~= player then
       local ls = plr:FindFirstChild("leaderstats")
@@ -50,12 +47,10 @@ local function hasHighLevelPlayers()
   return false
 end
 
--- Hop to new server (random public or private if available)
+-- Hop to new server (random public)
 local function hopServer()
   local placeId = game.PlaceId
-  local ok, err = pcall(function()
-    TeleportService:Teleport(placeId, player)
-  end)
+  local ok, err = pcall(TeleportService.Teleport, TeleportService, placeId, player)
   if not ok then
     warn("[Sahur Hopper] Teleport failed:", err)
   end
@@ -65,27 +60,27 @@ end
 local function farmSahur()
   local f = getFarm()
   if not f then
-    warn("[Sahur Hopper] farm.lua not loaded; skipping Sahur farm.")
+    warn("[Sahur Hopper] farm.lua not available; skipping Sahur farm.")
     return false
   end
 
   -- Set target to Sahur
-  local sahurName = "Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Sarur"
+  local sahurName = "Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Sarur"
   f.setSelected({sahurName})
   f.setFastLevelEnabled(true)  -- Enable FastLevel for boss
 
-  -- Start auto-farm loop (flag always true until killed)
+  -- Start auto-farm (stop on kill)
   local bossKilled = false
-  local connection
-  connection = f.runAutoFarm(function() return not bossKilled end, function(text)
-    if string.find(text or "", "Current Target: None") then
-      bossKilled = true
-      connection:Disconnect()  -- Stop loop
-    end
+  local startTime = tick()
+  task.spawn(function()
+    f.runAutoFarm(function() return not bossKilled and (tick() - startTime < 300) end, function(text)
+      if string.find(text or "", "Current Target: None") then
+        bossKilled = true
+      end
+    end)
   end)
 
   -- Wait for kill (timeout 5min)
-  local startTime = tick()
   repeat
     RunService.Heartbeat:Wait()
   until bossKilled or (tick() - startTime > 300)
@@ -104,16 +99,16 @@ local function loop()
         -- High levels: Wait 5s, hop
         task.wait(5)
         hopServer()
-        task.wait(5)  -- Check after hop settles
+        task.wait(5)  -- Settle after hop
       else
-        -- Clear server: Farm Sahur
+        -- Clear: Farm Sahur
         local killed = farmSahur()
         if killed then
           task.wait(5)
           hopServer()
           task.wait(5)
         else
-          task.wait(10)  -- Retry if failed
+          task.wait(10)  -- Retry
         end
       end
     end
