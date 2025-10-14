@@ -153,16 +153,6 @@ function M.build(h)
     Options:CreateButton({ Name = "Private Server", Callback = function() h.onPrivateServer() end })
   end
 
-  if sahurHopper and sahurHopper.enable then
-  Options:CreateToggle({
-    Name = "Auto Sahur Server Hop",
-    CurrentValue = false,
-    Callback = function(v)
-      if v then sahurHopper.enable() else sahurHopper.disable() end
-    end
-  })
-end
-
   -- Dungeon toggles (if provided)
   if h.onDungeonAutoToggle then
     Options:CreateToggle({ Name="Dungeon Auto-Attack", CurrentValue=false, Callback=function(v) h.onDungeonAutoToggle(v) end })
