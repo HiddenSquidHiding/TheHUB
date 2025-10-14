@@ -1,10 +1,11 @@
 -- ui_rayfield.lua — Rayfield UI with live-search model picker + Clear All.
 
 local ok, Rayfield = pcall(function()
-  return loadstring(game:HttpGet("https://sirius.menu/rayfield"))()
+  return loadstring(game:HttpGet("https://raw.githubusercontent.com/SiriusSoftwareLtd/Rayfield/main/source.lua"))()
 end)
 
 if not ok or not Rayfield then
+  warn("[ui_rayfield] Rayfield failed to load from URL")
   return {
     build = function()
       warn("[ui_rayfield] Rayfield failed to load")
