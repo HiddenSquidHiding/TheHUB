@@ -21,13 +21,12 @@ local utils = getUtils()
 -- otherwise it fetches https://.../data_monsters.lua using _G.WOODZ_BASE_URL
 local data
 do
-  local g = rawget(getfenv(), "_G")
-  if g and type(g.WOODZ_DATA_MONSTERS) == "table" then
-    data = g.WOODZ_DATA_MONSTERS
+  if _G.WOODZ_DATA_MONSTERS and type(_G.WOODZ_DATA_MONSTERS) == "table" then
+    data = _G.WOODZ_DATA_MONSTERS
   end
 
   if not data then
-    local base = g and g.WOODZ_BASE_URL
+    local base = _G.WOODZ_BASE_URL
     if type(base) == "string" and #base > 0 then
       local ok, src = pcall(function()
         return game:HttpGet((base:sub(-1) == "/" and base or (base .. "/")) .. "data_monsters.lua")
@@ -199,189 +198,129 @@ function M.getMonsterModels()
   return valid
 end
 
-function M.getFiltered()
-  return filteredMonsterModels
-end
-
-function M.filterMonsterModels(text)
-  text = tostring(text or ""):lower()
-  local filtered = {}
-  local function matchesAny(list)
-    for _, n in ipairs(list) do
-      if string.find(n:lower(), text, 1, true) then return true end
-    end
-    return false
-  end
-
+function M.filterMonsterModels(search)
+  local text = tostring(search or ""):lower()
   if text == "" then
-    filtered = allMonsterModels
-  else
-    for _, model in ipairs(allMonsterModels) do
-      if model == "Weather Events" then
-        if matchesAny(WEATHER_NAMES) then table.insert(filtered, model) end
-      elseif model == "To Sahur" then
-        if matchesAny(SAHUR_NAMES) then table.insert(filtered, model) end
-      elseif string.find(model:lower(), text, 1, true) then
-        table.insert(filtered, model)
-      end
-    end
-  end
-
-  table.sort(filtered)
-  if #filtered == 0 then
-    utils.notify("🌲 Search", "No models found; showing all.", 3)
-    filtered = allMonsterModels
-  end
-  filteredMonsterModels = filtered
-  return filtered
-end
-
-----------------------------------------------------------------------
--- Enemy prioritization
-----------------------------------------------------------------------
-local function refreshEnemyList()
-  local wantWeather = table.find(selectedMonsterModels, "Weather Events") ~= nil
-  local wantSahur   = table.find(selectedMonsterModels, "To Sahur") ~= nil
-
-  local explicitSet = {}
-  for _, n in ipairs(selectedMonsterModels) do
-    if n ~= "Weather Events" and n ~= "To Sahur" then explicitSet[n:lower()] = true end
-  end
-
-  local weather, explicit, sahur = {}, {}, {}
-  for _, node in ipairs(Workspace:GetDescendants()) do
-    if node:IsA("Model") and not Players:GetPlayerFromCharacter(node) then
-      local h = node:FindFirstChildOfClass("Humanoid")
-      if h and h.Health > 0 then
-        local lname = node.Name:lower()
-        if wantWeather and isWeatherName(lname) then
-          table.insert(weather, node)
-        elseif explicitSet[lname] then
-          table.insert(explicit, node)
-        elseif wantSahur and isSahurName(lname) then
-          table.insert(sahur, node)
-        end
-      end
-    end
+    filteredMonsterModels = table.clone(allMonsterModels)
+    return filteredMonsterModels
   end
 
   local out = {}
-  for _, e in ipairs(weather)  do table.insert(out, e) end
-  for _, e in ipairs(explicit) do table.insert(out, e) end
-  for _, e in ipairs(sahur)    do table.insert(out, e) end
+  for _, v in ipairs(allMonsterModels) do
+    if v:lower():find(text, 1, true) then
+      table.insert(out, v)
+    end
+  end
+  filteredMonsterModels = out
   return out
 end
 
 ----------------------------------------------------------------------
--- Remote
+-- Auto-attack remote setup
 ----------------------------------------------------------------------
-local autoAttackRemote = nil
+local autoAttackRemote
 function M.setupAutoAttackRemote()
-  autoAttackRemote = nil
-  local ok, remote = pcall(function()
-    return ReplicatedStorage:WaitForChild("Packages")
-      :WaitForChild("Knit")
-      :WaitForChild("Services")
-      :WaitForChild("MonsterService")
-      :WaitForChild("RF")
-      :WaitForChild("RequestAttack")
-  end)
-  if ok and remote and remote:IsA("RemoteFunction") then
-    autoAttackRemote = remote
-    utils.notify("🌲 Auto Attack", "RequestAttack ready.", 3)
-  else
-    utils.notify("🌲 Auto Attack", "RequestAttack NOT found; farming may fail.", 5)
+  local remotes = ReplicatedStorage:WaitForChild("Remotes", 5)
+  if not remotes then
+    utils.notify("🌲 Auto-Farm", "Remotes folder not found.", 5)
+    return
+  end
+  autoAttackRemote = remotes:WaitForChild("RequestAttack", 5)
+  if not autoAttackRemote then
+    utils.notify("🌲 Auto-Farm", "RequestAttack RemoteFunction not found.", 5)
   end
 end
 
 ----------------------------------------------------------------------
--- Helpers
+-- Teleport / velocity helpers
 ----------------------------------------------------------------------
+local function hardTeleport(cf)
+  local character = player.Character
+  if not character then return end
+  local hrp = character:FindFirstChild("HumanoidRootPart")
+  if hrp then
+    hrp.CFrame = cf
+  end
+end
+
+local function zeroVel(part)
+  if part and part:IsA("BasePart") then
+    part.Velocity = Vector3.new()
+    part.RotVelocity = Vector3.new()
+    part.AssemblyLinearVelocity = Vector3.new()
+    part.AssemblyAngularVelocity = Vector3.new()
+  end
+end
+
 local function isValidCFrame(cf)
-  if not cf then return false end
-  local p = cf.Position
-  return p.X == p.X and p.Y == p.Y and p.Z == p.Z
-     and math.abs(p.X) < 10000 and math.abs(p.Y) < 10000 and math.abs(p.Z) < 10000
+  return cf and cf:IsA("CFrame") and cf.Position.Magnitude < math.huge
 end
 
 local function findBasePart(model)
-  if not model then return nil end
-  local names = { "HumanoidRootPart","PrimaryPart","Body","Hitbox","Root","Main" }
-  for _, n in ipairs(names) do
-    local part = model:FindFirstChild(n)
-    if part and part:IsA("BasePart") then return part end
-  end
-  for _, d in ipairs(model:GetDescendants()) do
-    if d:IsA("BasePart") then return d end
+  local part = model:FindFirstChild("HumanoidRootPart")
+  if part then return part end
+  for _, p in ipairs(model:GetChildren()) do
+    if p:IsA("BasePart") then return p end
   end
   return nil
 end
 
-local function zeroVel(hrp)
-  pcall(function()
-    hrp.AssemblyLinearVelocity  = Vector3.zero
-    hrp.AssemblyAngularVelocity = Vector3.zero
-  end)
-end
-
--- Single, glide-free hop with replication
-local function hardTeleport(cf)
-  local char = player.Character
-  if not char then return end
-  local hum = char:FindFirstChildOfClass("Humanoid")
-  local hrp = char:FindFirstChild("HumanoidRootPart")
-  if not hum or not hrp then return end
-  zeroVel(hrp)
-  local oldPS = hum.PlatformStand
-  hum.PlatformStand = true
-  char:PivotTo(cf)
-  RunService.Heartbeat:Wait()
-  hum.PlatformStand = oldPS
-end
-
 ----------------------------------------------------------------------
--- Smooth follow via constraints (created once per fight, cleaned each time)
+-- Smooth follow constraint maker
 ----------------------------------------------------------------------
-local function makeSmoothFollow(hrp)
-  local a0 = Instance.new("Attachment")
-  a0.Name = "WoodzHub_A0"
-  a0.Parent = hrp
+local function makeSmoothFollow(targetPart)
+  local character = player.Character
+  if not character or not targetPart then return nil end
+  local hrp = character:FindFirstChild("HumanoidRootPart")
+  if not hrp then return nil end
 
-  local ap = Instance.new("AlignPosition")
-  ap.Name = "WoodzHub_AP"
-  ap.Mode = Enum.PositionAlignmentMode.OneAttachment
-  ap.Attachment0 = a0
-  ap.ApplyAtCenterOfMass = true
-  ap.MaxForce = POS_MAX_FORCE
-  ap.Responsiveness = POS_RESPONSIVENESS
-  ap.RigidityEnabled = false
-  ap.Parent = hrp
+  local att0 = Instance.new("Attachment")
+  att0.Parent = hrp
+  local att1 = Instance.new("Attachment")
+  att1.Parent = targetPart  -- wait, no: for follow, att1 on a dummy or something? Wait, standard is AlignPosition + AlignOrientation between two attachments.
 
-  local ao = Instance.new("AlignOrientation")
-  ao.Name = "WoodzHub_AO"
-  ao.Mode = Enum.OrientationAlignmentMode.OneAttachment
-  ao.Attachment0 = a0
-  ao.MaxTorque = ORI_MAX_TORQUE
-  ao.Responsiveness = ORI_RESPONSIVENESS
-  ao.RigidityEnabled = false
-  ao.Parent = hrp
+  -- For player follow: Attachment on HRP, and a dummy target attachment that we update.
+  local dummyAtt = Instance.new("Attachment")
+  dummyAtt.Parent = hrp.Parent  -- in character
 
-  local ctl = {}
-  function ctl:setGoal(cf)
-    ap.Position = cf.Position
-    ao.CFrame  = cf.Rotation
+  local posConstraint = Instance.new("AlignPosition")
+  posConstraint.Attachment0 = att0
+  posConstraint.Attachment1 = dummyAtt
+  posConstraint.RigidityEnabled = false
+  posConstraint.MaxForce = POS_MAX_FORCE
+  posConstraint.Responsiveness = POS_RESPONSIVENESS
+  posConstraint.Parent = hrp
+
+  local oriConstraint = Instance.new("AlignOrientation")
+  oriConstraint.Attachment0 = att0
+  oriConstraint.Attachment1 = dummyAtt
+  oriConstraint.RigidityEnabled = false
+  oriConstraint.MaxTorque = ORI_MAX_TORQUE
+  oriConstraint.Responsiveness = ORI_RESPONSIVENESS
+  oriConstraint.Parent = hrp
+
+  local function setGoal(cf)
+    if dummyAtt and isValidCFrame(cf) then
+      dummyAtt.CFrame = cf
+    end
   end
-  function ctl:destroy()
-    ap:Destroy(); ao:Destroy(); a0:Destroy()
+
+  local function destroy()
+    pcall(function()
+      posConstraint:Destroy()
+      oriConstraint:Destroy()
+      att0:Destroy()
+      dummyAtt:Destroy()
+    end)
   end
-  return ctl
+
+  return { setGoal = setGoal, destroy = destroy }
 end
 
 ----------------------------------------------------------------------
--- Weather TTK estimator (quick probe without moving)
+-- TTK estimator (probe DPS briefly)
 ----------------------------------------------------------------------
 local function estimateTTK(enemy, probeTime)
-  if not enemy or not enemy.Parent then return math.huge end
   local hum = enemy:FindFirstChildOfClass("Humanoid")
   if not hum or hum.Health <= 0 then return math.huge end
   local part = enemy:FindFirstChild("HumanoidRootPart") or findBasePart(enemy)
@@ -445,6 +384,43 @@ function M.runAutoFarm(flagGetter, setTargetText)
     if setTargetText then setTargetText(text) end
   end
 
+  -- Initial scan for enemies
+  local function refreshEnemyList()
+    local enemies = {}
+    for _, name in ipairs(selectedMonsterModels) do
+      if name == "Weather Events" then
+        local we = findWeatherEnemies()
+        for _, e in ipairs(we) do table.insert(enemies, e) end
+      elseif name == "To Sahur" then
+        for _, node in ipairs(Workspace:GetDescendants()) do
+          if node:IsA("Model") and not Players:GetPlayerFromCharacter(node) then
+            local h = node:FindFirstChildOfClass("Humanoid")
+            if h and h.Health > 0 and isSahurName(node.Name) then
+              table.insert(enemies, node)
+            end
+          end
+        end
+      else
+        -- Regular monster by name
+        for _, node in ipairs(Workspace:GetDescendants()) do
+          if node:IsA("Model") and not Players:GetPlayerFromCharacter(node) and node.Name == name then
+            local h = node:FindFirstChildOfClass("Humanoid")
+            if h and h.Health > 0 then
+              table.insert(enemies, node)
+            end
+          end
+        end
+      end
+    end
+    -- Prioritize lowest HP
+    table.sort(enemies, function(a, b)
+      local ha = (a:FindFirstChildOfClass("Humanoid") and a:FindFirstChildOfClass("Humanoid").Health) or math.huge
+      local hb = (b:FindFirstChildOfClass("Humanoid") and b:FindFirstChildOfClass("Humanoid").Health) or math.huge
+      return ha < hb
+    end)
+    return enemies
+  end
+
   while flagGetter() do
     local character = utils.waitForCharacter()
     local hum = character:FindFirstChildOfClass("Humanoid")
@@ -452,26 +428,26 @@ function M.runAutoFarm(flagGetter, setTargetText)
     if not hum or hum.Health <= 0 or not hrp then
       label("Current Target: None")
       task.wait(0.05)
-      continue
+      goto continue
     end
 
     local enemies = refreshEnemyList()
     if #enemies == 0 then
       label("Current Target: None")
       task.wait(0.1)
-      continue
+      goto continue
     end
 
     for _, enemy in ipairs(enemies) do
       if not flagGetter() then break end
-      if not enemy or not enemy.Parent or Players:GetPlayerFromCharacter(enemy) then continue end
+      if not enemy or not enemy.Parent or Players:GetPlayerFromCharacter(enemy) then goto nextEnemy end
 
       local eh = enemy:FindFirstChildOfClass("Humanoid")
-      if not eh or eh.Health <= 0 then continue end
+      if not eh or eh.Health <= 0 then goto nextEnemy end
 
       -- enter engagement (teleport + constraints)
       local ctl, humSelf, oldPS = beginEngagement(enemy)
-      if not ctl then continue end
+      if not ctl then goto nextEnemy end
 
       label(("Current Target: %s (Health: %s)"):format(enemy.Name, math.floor(eh.Health)))
 
@@ -567,8 +543,12 @@ function M.runAutoFarm(flagGetter, setTargetText)
         zeroVel(curHRP)
       end
 
+      ::nextEnemy::
+
       RunService.Heartbeat:Wait()
     end
+
+    ::continue::
 
     RunService.Heartbeat:Wait()
   end
