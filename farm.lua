@@ -276,10 +276,7 @@ local function makeSmoothFollow(targetPart)
 
   local att0 = Instance.new("Attachment")
   att0.Parent = hrp
-  local att1 = Instance.new("Attachment")
-  att1.Parent = targetPart  -- wait, no: for follow, att1 on a dummy or something? Wait, standard is AlignPosition + AlignOrientation between two attachments.
 
-  -- For player follow: Attachment on HRP, and a dummy target attachment that we update.
   local dummyAtt = Instance.new("Attachment")
   dummyAtt.Parent = hrp.Parent  -- in character
 
@@ -428,128 +425,134 @@ function M.runAutoFarm(flagGetter, setTargetText)
     if not hum or hum.Health <= 0 or not hrp then
       label("Current Target: None")
       task.wait(0.05)
-      goto continue
-    end
-
-    local enemies = refreshEnemyList()
-    if #enemies == 0 then
-      label("Current Target: None")
-      task.wait(0.1)
-      goto continue
-    end
-
-    for _, enemy in ipairs(enemies) do
-      if not flagGetter() then break end
-      if not enemy or not enemy.Parent or Players:GetPlayerFromCharacter(enemy) then goto nextEnemy end
-
-      local eh = enemy:FindFirstChildOfClass("Humanoid")
-      if not eh or eh.Health <= 0 then goto nextEnemy end
-
-      -- enter engagement (teleport + constraints)
-      local ctl, humSelf, oldPS = beginEngagement(enemy)
-      if not ctl then goto nextEnemy end
-
-      label(("Current Target: %s (Health: %s)"):format(enemy.Name, math.floor(eh.Health)))
-
-      -- timers/state
-      local isWeather   = isWeatherName(enemy.Name)
-      local lastHealth  = eh.Health
-      local lastDropAt  = tick()
-      local startedAt   = tick()
-
-      local hcConn = eh.HealthChanged:Connect(function(h)
-        label(("Current Target: %s (Health: %s)"):format(enemy.Name, math.floor(h)))
-        if h < lastHealth then lastDropAt = tick() end
-        lastHealth = h
-      end)
-
-      -- attack loop (with weather preemption + FastLevel stall override + death recovery)
-      local lastWeatherPoll = 0
-
-      while flagGetter() and enemy.Parent and eh.Health > 0 do
-        -- death recovery: if we died or HRP missing, respawn + return to same enemy
-        local ch = player.Character
-        local myHum = ch and ch:FindFirstChildOfClass("Humanoid")
-        local myHRP = ch and ch:FindFirstChild("HumanoidRootPart")
-
-        if (not ch) or (not myHum) or (myHum.Health <= 0) or (not myHRP) then
-          if ctl then pcall(function() ctl:destroy() end) end
-          label(("Respawning… returning to %s"):format(enemy.Name))
-          local newChar = utils.waitForCharacter()
-          if not enemy.Parent or eh.Health <= 0 then break end
-          ctl, humSelf, oldPS = beginEngagement(enemy)
-          if not ctl then break end
-        end
-
-        -- normal follow/attack
-        local partNow = findBasePart(enemy)
-        if not partNow then
-          local t0 = tick()
-          repeat
+    else
+      local enemies = refreshEnemyList()
+      if #enemies == 0 then
+        label("Current Target: None")
+        task.wait(0.1)
+      else
+        for _, enemy in ipairs(enemies) do
+          if not flagGetter() then break end
+          if not enemy or not enemy.Parent or Players:GetPlayerFromCharacter(enemy) then
             RunService.Heartbeat:Wait()
-            partNow = findBasePart(enemy)
-          until partNow or (tick() - t0) > 1 or not enemy.Parent or eh.Health <= 0
-          if not partNow then break end
-        end
+            goto continue_enemy
+          end
 
-        local desired = partNow.CFrame * CFrame.new(ABOVE_OFFSET)
-        ctl:setGoal(desired)
+          local eh = enemy:FindFirstChildOfClass("Humanoid")
+          if not eh or eh.Health <= 0 then
+            RunService.Heartbeat:Wait()
+            goto continue_enemy
+          end
 
-        local hrpTarget = enemy:FindFirstChild("HumanoidRootPart")
-        if hrpTarget and autoAttackRemote then
-          pcall(function() autoAttackRemote:InvokeServer(hrpTarget.CFrame) end)
-        end
+          -- enter engagement (teleport + constraints)
+          local ctl, humSelf, oldPS = beginEngagement(enemy)
+          if not ctl then
+            RunService.Heartbeat:Wait()
+            goto continue_enemy
+          end
 
-        local now = tick()
+          label(("Current Target: %s (Health: %s)"):format(enemy.Name, math.floor(eh.Health)))
 
-        -- Weather timeout (always applies for weather)
-        if isWeather and (now - startedAt) > WEATHER_TIMEOUT then
-          utils.notify("🌲 Auto-Farm", ("Weather Event timeout on %s after %ds."):format(enemy.Name, WEATHER_TIMEOUT), 3)
-          break
-        end
+          -- timers/state
+          local isWeather   = isWeatherName(enemy.Name)
+          local lastHealth  = eh.Health
+          local lastDropAt  = tick()
+          local startedAt   = tick()
 
-        -- Stall detection (disabled in FastLevel mode for non-weather)
-        if (not isWeather) and (not FASTLEVEL_MODE) and ((now - lastDropAt) > NON_WEATHER_STALL_TIMEOUT) then
-          utils.notify("🌲 Auto-Farm", ("Skipping %s (no HP change for %0.1fs)"):format(enemy.Name, NON_WEATHER_STALL_TIMEOUT), 3)
-          break
-        end
+          local hcConn
+          hcConn = eh.HealthChanged:Connect(function(h)
+            label(("Current Target: %s (Health: %s)"):format(enemy.Name, math.floor(h)))
+            if h < lastHealth then lastDropAt = tick() end
+            lastHealth = h
+          end)
 
-        -- Weather preemption with TTK (only if not already on weather)
-        if not isWeather and (now - lastWeatherPoll) >= WEATHER_PREEMPT_POLL and isWeatherSelected() then
-          lastWeatherPoll = now
-          local candidate = pickLowestHPWeather()
-          if candidate and candidate ~= enemy then
-            local ttk = estimateTTK(candidate, WEATHER_PROBE_TIME)
-            if ttk <= WEATHER_TTK_LIMIT then
-              utils.notify("🌲 Auto-Farm", ("Weather target detected (TTK≈%0.1fs) — switching."):format(ttk), 2)
+          -- attack loop (with weather preemption + FastLevel stall override + death recovery)
+          local lastWeatherPoll = 0
+          local engaged = true
+
+          while flagGetter() and enemy.Parent and eh.Health > 0 and engaged do
+            -- death recovery: if we died or HRP missing, respawn + return to same enemy
+            local ch = player.Character
+            local myHum = ch and ch:FindFirstChildOfClass("Humanoid")
+            local myHRP = ch and ch:FindFirstChild("HumanoidRootPart")
+
+            if (not ch) or (not myHum) or (myHum.Health <= 0) or (not myHRP) then
+              if ctl then pcall(function() ctl.destroy(ctl) end) end
+              label(("Respawning… returning to %s"):format(enemy.Name))
+              local newChar = utils.waitForCharacter()
+              if not enemy.Parent or eh.Health <= 0 then break end
+              ctl, humSelf, oldPS = beginEngagement(enemy)
+              if not ctl then break end
+            end
+
+            -- normal follow/attack
+            local partNow = findBasePart(enemy)
+            if not partNow then
+              local t0 = tick()
+              repeat
+                RunService.Heartbeat:Wait()
+                partNow = findBasePart(enemy)
+              until partNow or (tick() - t0) > 1 or not enemy.Parent or eh.Health <= 0
+              if not partNow then break end
+            end
+
+            local desired = partNow.CFrame * CFrame.new(ABOVE_OFFSET)
+            ctl.setGoal(ctl, desired)
+
+            local hrpTarget = enemy:FindFirstChild("HumanoidRootPart")
+            if hrpTarget and autoAttackRemote then
+              pcall(function() autoAttackRemote:InvokeServer(hrpTarget.CFrame) end)
+            end
+
+            local now = tick()
+
+            -- Weather timeout (always applies for weather)
+            if isWeather and (now - startedAt) > WEATHER_TIMEOUT then
+              utils.notify("🌲 Auto-Farm", ("Weather Event timeout on %s after %ds."):format(enemy.Name, WEATHER_TIMEOUT), 3)
               break
             end
+
+            -- Stall detection (disabled in FastLevel mode for non-weather)
+            if (not isWeather) and (not FASTLEVEL_MODE) and ((now - lastDropAt) > NON_WEATHER_STALL_TIMEOUT) then
+              utils.notify("🌲 Auto-Farm", ("Skipping %s (no HP change for %0.1fs)"):format(enemy.Name, NON_WEATHER_STALL_TIMEOUT), 3)
+              break
+            end
+
+            -- Weather preemption with TTK (only if not already on weather)
+            if not isWeather and (now - lastWeatherPoll) >= WEATHER_PREEMPT_POLL and isWeatherSelected() then
+              lastWeatherPoll = now
+              local candidate = pickLowestHPWeather()
+              if candidate and candidate ~= enemy then
+                local ttk = estimateTTK(candidate, WEATHER_PROBE_TIME)
+                if ttk <= WEATHER_TTK_LIMIT then
+                  utils.notify("🌲 Auto-Farm", ("Weather target detected (TTK≈%0.1fs) — switching."):format(ttk), 2)
+                  break
+                end
+              end
+            end
+
+            RunService.Heartbeat:Wait()
           end
+
+          if hcConn then hcConn:Disconnect() end
+          label("Current Target: None")
+
+          -- cleanup + restore
+          if ctl then pcall(function() ctl.destroy(ctl) end) end
+          local curChar = player.Character
+          local curHum  = curChar and curChar:FindFirstChildOfClass("Humanoid")
+          local curHRP  = curChar and curChar:FindFirstChild("HumanoidRootPart")
+          if curHum and curHRP and curHum.Parent then
+            curHum.PlatformStand = false
+            zeroVel(curHRP)
+          end
+
+          ::continue_enemy::
+
+          RunService.Heartbeat:Wait()
         end
-
-        RunService.Heartbeat:Wait()
       end
-
-      if hcConn then hcConn:Disconnect() end
-      label("Current Target: None")
-
-      -- cleanup + restore
-      if ctl then pcall(function() ctl:destroy() end) end
-      local curChar = player.Character
-      local curHum  = curChar and curChar:FindFirstChildOfClass("Humanoid")
-      local curHRP  = curChar and curChar:FindFirstChild("HumanoidRootPart")
-      if curHum and curHRP and curHum.Parent then
-        curHum.PlatformStand = false
-        zeroVel(curHRP)
-      end
-
-      ::nextEnemy::
-
-      RunService.Heartbeat:Wait()
     end
-
-    ::continue::
-
     RunService.Heartbeat:Wait()
   end
 end
