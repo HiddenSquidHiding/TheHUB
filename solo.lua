@@ -1,6 +1,9 @@
 -- solo.lua: Defines private server teleport function (run this BEFORE hub.lua via executor)
 -- Does NOT auto-teleport; just sets up _G.TeleportToPrivateServer for later use.
 
+if _G.__WOODZ_SOLO_LOADED then return true end
+_G.__WOODZ_SOLO_LOADED = true
+
 local md5 = {}
 local hmac = {}
 local base64 = {}
@@ -198,9 +201,11 @@ local function GenerateReservedServerCode(placeId)
 end
 
 -- Define the teleport function but DO NOT call it here (no auto-run)
-TeleportToPrivateServer = function()
+_G.TeleportToPrivateServer = function()
 	local accessCode, _ = GenerateReservedServerCode(game.PlaceId)
 	game.RobloxReplicatedStorage.ContactListIrisInviteTeleport:FireServer(game.PlaceId, "", accessCode)
+	print("[solo.lua] TeleportToPrivateServer() called")
+  return true
 end
 
-return TeleportToPrivateServer
+return true
