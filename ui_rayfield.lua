@@ -89,6 +89,7 @@ function M.build(opts)
       end)
     end,
   })
+end
 
   utils.notify("🌲 WoodzHUB", "Rayfield UI loaded.", 3)
 
