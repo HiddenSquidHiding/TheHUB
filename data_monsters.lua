@@ -37,6 +37,8 @@ return {
     "Pipi Kiwi Boss",
     "Los OrcoIocos",
     "Pkin Kin Kin Kin Kin Kun",
+    "Halloween2",
+    "Spidorobos Crate",
   },
 
   forcedMonsters = {
