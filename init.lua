@@ -128,6 +128,16 @@ end
 -- 🔹 FIX: Expose the shim as global so app.lua's r() works
 _G.__WOODZ_REQUIRE = shimRequire
 
+-- 🔹 NEW: Set globals for farm.lua (preload data_monsters + base URL)
+_G.WOODZ_BASE_URL = BASE
+local dataMonstersMod = shimRequire("data_monsters")
+if dataMonstersMod and type(dataMonstersMod) == "table" then
+  _G.WOODZ_DATA_MONSTERS = dataMonstersMod
+  print("[loader] Preloaded data_monsters.lua successfully.")
+else
+  warn("[loader] data_monsters.lua missing or invalid; farm.lua may fetch it directly.")
+end
+
 ----------------------------------------------------------------------
 -- Boot app.lua
 ----------------------------------------------------------------------
