@@ -203,7 +203,7 @@ function App.start()
     onFastLevelToggle = (profile.ui.fastlevel and function(v)
       fastOn = (v ~= nil) and v or (not fastOn)
       if fastOn then
-        local sahurName = "Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Sarur"
+        local sahurName = "Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Sarur"
         local list = { sahurName }
         pcall(function() if farm and farm.setSelected then farm.setSelected(list) end end)
         pcall(function() if farm and farm.setFastLevelEnabled then farm.setFastLevelEnabled(true) end end)
