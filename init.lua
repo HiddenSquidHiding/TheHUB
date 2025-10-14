@@ -1,109 +1,135 @@
--- init.lua — WoodzHUB single-entry bootstrap (executor-friendly)
+-- init.lua — robust HTTP loader for WoodzHUB (one file)
+-- Loads all hub files from your GitHub, wires a sibling-style `require`,
+-- injects utils so modules that call getUtils() don't crash, then runs app.
 
--- ===== guard against double-loads =====
-if _G.__WOODZHUB_BOOTED then
-  return
+local BASE = "https://raw.githubusercontent.com/HiddenSquidHiding/TheHUB/main/"
+
+-- What we *might* load. Missing ones are OK (marked optional).
+local WANT = {
+  "app.lua",
+  "ui_rayfield.lua",
+  "games.lua",
+  -- feature modules (optional; load if present)
+  "farm.lua",
+  "smart_target.lua",
+  "merchants.lua",
+  "crates.lua",
+  "fastlevel.lua",
+  "redeem_unredeemed_codes.lua",
+  "dungeon_be.lua",
+  "anti_afk.lua",
+  "hud.lua",
+  "constants.lua",
+  "data_monsters.lua",
+  "solo.lua",
+}
+
+----------------------------------------------------------------------
+-- Utils injected for every module (satisfies getUtils() fallbacks)
+----------------------------------------------------------------------
+local function notify(title, msg, dur)
+  dur = dur or 3
+  print(("🌲 %s | %s"):format(tostring(title), tostring(msg)))
 end
-_G.__WOODZHUB_BOOTED = true
 
--- ===== base URL to your repo (must end with "/") =====
-_G.WOODZ_BASE_URL = _G.WOODZ_BASE_URL or "https://raw.githubusercontent.com/HiddenSquidHiding/TheHUB/main/"
+local utils = {
+  notify = notify,
+  waitForCharacter = function()
+    local Players = game:GetService("Players")
+    local p = Players.LocalPlayer
+    while not p.Character
+      or not p.Character:FindFirstChild("HumanoidRootPart")
+      or not p.Character:FindFirstChildOfClass("Humanoid") do
+      p.CharacterAdded:Wait()
+      task.wait()
+    end
+    return p.Character
+  end,
+}
 
--- ===== tiny helpers =====
-local function http_get(path)
-  local base = _G.WOODZ_BASE_URL or ""
-  if base:sub(-1) ~= "/" then base = base .. "/" end
-  local url = base .. path
+-- Make modules that look for __WOODZ_UTILS happy
+getfenv(0).__WOODZ_UTILS = utils
+
+----------------------------------------------------------------------
+-- Fetch all files we care about
+----------------------------------------------------------------------
+local httpGet = function(url)
   return game:HttpGet(url)
 end
 
-local function try_load_chunk(src, chunkname)
-  local chunk, err = loadstring(src, chunkname or "=chunk")
-  if not chunk then error(err or "loadstring failed") end
+local sources = {}   -- name -> source string
+for _, fname in ipairs(WANT) do
+  local url = BASE .. fname
+  local ok, src = pcall(httpGet, url)
+  if ok and type(src) == "string" and #src > 0 then
+    sources[fname] = src
+  end
+end
+
+----------------------------------------------------------------------
+-- Sibling-style require shim
+----------------------------------------------------------------------
+local moduleCache = {} -- name -> module table/function result
+
+local function normalize(name)
+  -- allow "ui_rayfield" or "ui_rayfield.lua"
+  if sources[name] then return name end
+  local withLua = name .. ".lua"
+  if sources[withLua] then return withLua end
+  return nil
+end
+
+local function makeEnv(name, requireFn, siblingsTable)
+  -- Provide a `script` with Parent->_deps.utils like ModuleScripts expect
+  local env = {}
+  env.script = { Parent = siblingsTable }
+  setmetatable(env, { __index = getfenv(0) })
+  return env
+end
+
+local siblings = {
+  _deps = { utils = utils },
+}
+
+local function shimRequire(name)
+  local key = normalize(name)
+  assert(key, ("[loader] require(%s) not found next to init (check file name)"):format(tostring(name)))
+  if moduleCache[key] ~= nil then return moduleCache[key] end
+
+  local chunkSrc = sources[key]
+  local chunk, err = loadstring(chunkSrc, "=" .. key)
+  assert(chunk, ("[loader] compile failed for %s: %s"):format(key, tostring(err)))
+
+  local function localRequire(childName) return shimRequire(childName) end
+  local env = makeEnv(key, localRequire, siblings)
+  env.require = localRequire
+  env.__WOODZ_UTILS = utils
+  setfenv(chunk, env)
+
   local ok, ret = pcall(chunk)
-  if not ok then error(ret) end
+  assert(ok, ("[loader] runtime error for %s: %s"):format(key, tostring(ret)))
+
+  moduleCache[key] = ret
+  siblings[key:gsub("%.lua$","")] = ret -- allow script.Parent.ui_rayfield style
   return ret
 end
 
--- ===== global utils expected by your modules =====
-if rawget(getfenv(), "__WOODZ_UTILS") == nil then
-  __WOODZ_UTILS = {
-    notify = function(title, msg, dur)
-      -- Safe notifier: console + Roblox notification if available
-      pcall(function() print(("[%s] %s"):format(title or "WoodzHUB", tostring(msg))) end)
-      pcall(function()
-        game:GetService("StarterGui"):SetCore("SendNotification", {
-          Title = tostring(title or "WoodzHUB"),
-          Text  = tostring(msg or ""),
-          Duration = tonumber(dur) or 3
-        })
-      end)
-    end,
-    waitForCharacter = function()
-      local Players = game:GetService("Players")
-      local plr = Players.LocalPlayer
-      while true do
-        local ch = plr.Character
-        if ch and ch:FindFirstChild("HumanoidRootPart") and ch:FindFirstChildOfClass("Humanoid") then
-          return ch
-        end
-        plr.CharacterAdded:Wait()
-        task.wait()
-      end
-    end,
-  }
+----------------------------------------------------------------------
+-- Boot app.lua
+----------------------------------------------------------------------
+local appMod = sources["app.lua"] and shimRequire("app") or nil
+if not appMod then
+  warn("[WoodzHUB] app.lua missing on GitHub URL; nothing to run.")
+  return
 end
 
--- ===== optional: preload data_monsters.lua so farm.lua sees it immediately =====
--- (farm.lua also fetches it by itself if this step fails; this just makes it deterministic)
-do
-  local ok = pcall(function()
-    if type(_G.WOODZ_DATA_MONSTERS) ~= "table" then
-      local src = http_get("data_monsters.lua")
-      local ret = try_load_chunk(src, "=data_monsters.lua")
-      if type(ret) ~= "table" then
-        error("data_monsters.lua did not return a table")
-      end
-      _G.WOODZ_DATA_MONSTERS = ret
-    end
-  end)
-  if not ok then
-    -- Don't hard-fail here; farm.lua has its own fetch path using _G.WOODZ_BASE_URL
-    __WOODZ_UTILS.notify("🌲 WoodzHUB", "data_monsters preload skipped (will be fetched by farm.lua).", 3)
-  end
-end
-
--- ===== fetch and run app.lua =====
-local app
-do
-  local ok, src = pcall(function() return http_get("app.lua") end)
-  if not ok or type(src) ~= "string" or #src == 0 then
-    error("[init] failed to download app.lua")
-  end
-  local ok2, ret = pcall(function() return try_load_chunk(src, "=app.lua") end)
-  if not ok2 then
-    error("[init] app.lua load failed: " .. tostring(ret))
-  end
-  app = ret
-end
-
--- app can be:
---  • a module table with start()   -> call start()
---  • a function (acts like start)  -> call it()
---  • or already side-effecting     -> do nothing
-local t = type(app)
-if t == "table" and type(app.start) == "function" then
-  local ok, err = pcall(app.start)
-  if not ok then
-    __WOODZ_UTILS.notify("🌲 WoodzHUB", "app.start() error: " .. tostring(err), 6)
-  end
-elseif t == "function" then
-  local ok, err = pcall(app)
-  if not ok then
-    __WOODZ_UTILS.notify("🌲 WoodzHUB", "app() error: " .. tostring(err), 6)
-  end
+-- app.lua might `return { start=function() ... end }` OR return a function.
+if type(appMod) == "table" and type(appMod.start) == "function" then
+  appMod.start()
+elseif type(appMod) == "function" then
+  appMod() -- legacy form
 else
-  -- nothing to call; app.lua may have booted itself
+  warn("[WoodzHUB] app.lua returned an unexpected value; expected table with start() or a function.")
 end
 
-__WOODZ_UTILS.notify("🌲 WoodzHUB", "Loaded successfully.", 3)
+print("🌲 WoodzHUB Loaded successfully.")
