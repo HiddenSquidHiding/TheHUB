@@ -64,6 +64,9 @@ local function farmSahur()
     return false
   end
 
+  -- 🔹 FIX: Setup remote before farming
+  pcall(f.setupAutoAttackRemote)
+
   -- Set target to Sahur
   local sahurName = "Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Sarur"
   f.setSelected({sahurName})
