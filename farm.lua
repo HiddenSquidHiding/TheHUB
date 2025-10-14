@@ -28,17 +28,49 @@ local function getUtils()
 end
 local utils = getUtils()
 
+-----------------------------------------------------------------------
+-- Optional data (robust loader + logging)
 ----------------------------------------------------------------------
--- Optional data (safe if missing)
-----------------------------------------------------------------------
-local data = nil
-do
-  local ok, mod = pcall(function() return require(script.Parent.data_monsters) end)
-  if ok and type(mod) == "table" then data = mod end
+local function tryLoadDataMonsters()
+  -- 1) Sibling require (works if your loader virtualizes siblings)
+  local ok1, tbl1 = pcall(function() return require(script.Parent.data_monsters) end)
+  if ok1 and type(tbl1) == "table" then return tbl1, "require(script.Parent.data_monsters)" end
+
+  -- 2) Global (let init.lua set _G.WOODZ_DATA_MONSTERS)
+  if type(rawget(_G, "WOODZ_DATA_MONSTERS")) == "table" then
+    return _G.WOODZ_DATA_MONSTERS, "_G.WOODZ_DATA_MONSTERS"
+  end
+
+  -- 3) HTTP fallback via base URL (let init.lua set _G.WOODZ_BASE_URL)
+  local base = rawget(_G, "WOODZ_BASE_URL")
+  if type(base) == "string" and base ~= "" then
+    local url = (base:sub(-1) == "/") and (base .. "data_monsters.lua") or (base .. "/data_monsters.lua")
+    local ok2, src = pcall(game.HttpGet, game, url)
+    if ok2 and type(src) == "string" and #src > 0 then
+      local fn = loadstring(src, "=data_monsters.lua")
+      if fn then
+        local ok3, tbl3 = pcall(fn)
+        if ok3 and type(tbl3) == "table" then return tbl3, "http:" .. url end
+      end
+    end
+  end
+
+  -- 4) Nothing found
+  return nil, nil
 end
 
+local data, dataSource = tryLoadDataMonsters()
 local WEATHER_NAMES = (data and data.weatherEventModels) or {}
 local SAHUR_NAMES   = (data and data.toSahurModels)     or {}
+
+-- Log what we actually have (so you can see counts in console)
+pcall(function()
+  local w = #WEATHER_NAMES
+  local s = #SAHUR_NAMES
+  local src = dataSource or "none"
+  utils.notify("🌲 Data", ("data_monsters: weather=%d, sahur=%d (via %s)"):format(w, s, src), 4)
+end)
+
 
 ----------------------------------------------------------------------
 -- Services & locals
