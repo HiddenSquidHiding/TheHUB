@@ -46,7 +46,7 @@ local dungeonBE = r("dungeon_be")
 
 -- 🔹 NEW: load solo.lua at boot so the Private Server button can call it later.
 -- IMPORTANT: your solo.lua must NOT teleport on load; it should only define _G.TeleportToPrivateServer.
-local _solo = r("solo")  -- ignore return; we just want its side-effect (define the function)
+local solo = r("solo")  -- ignore return; we just want its side-effect (define the function)
 
 -- Pick a profile from games.lua
 local function profileFromGames()
