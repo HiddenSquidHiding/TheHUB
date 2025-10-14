@@ -44,9 +44,9 @@ local redeem    = r("redeem_unredeemed_codes")
 local fastlevel = r("fastlevel")
 local dungeonBE = r("dungeon_be")
 local sahurHopper = r("sahur_hopper")
-local serverHopper = r("server_hopper")  -- New
 
 -- 🔹 NEW: load solo.lua at boot so the Private Server button can call it later.
+-- IMPORTANT: your solo.lua must NOT teleport on load; it should only define _G.TeleportToPrivateServer.
 local solo = r("solo")  -- ignore return; we just want its side-effect (define the function)
 
 -- Pick a profile from games.lua
@@ -143,7 +143,7 @@ function App.start()
     end) or nil,
 
     onFastLevelToggle = (profile.ui.fastlevel and function(v)
-      fastOn = (v ~= nil) and v or (not fastOn)
+      local fastOn = (v ~= nil) and v or false
       if fastOn then
         local sahurName = "Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Sarur"
         local list = { sahurName }
@@ -151,7 +151,10 @@ function App.start()
         pcall(function() if farm and farm.setFastLevelEnabled then farm.setFastLevelEnabled(true) end end)
         autoFarmOn = true
         if App.UI and App.UI.setAutoFarm then pcall(App.UI.setAutoFarm, true) end
-        startAutoFarmLoop()
+        -- Removed undefined startAutoFarmLoop()
+        if farm and farm.runAutoFarm then
+          task.spawn(function() farm.runAutoFarm(function() return fastOn end, App.UI and App.UI.setCurrentTarget) end)
+        end
       else
         pcall(function() if farm and farm.setFastLevelEnabled then farm.setFastLevelEnabled(false) end end)
         autoFarmOn = false
@@ -174,21 +177,6 @@ function App.start()
           note("🌲 Private Server", "Failed to teleport: " .. tostring(err), 5)
         end
       end)
-    end) or nil,
-
-    -- 🔹 Sahur Hopper toggle
-    onSahurHopperToggle = (profile.ui.sahurHopper and function(v)
-      if sahurHopper and sahurHopper.enable then
-        if v then sahurHopper.enable() else sahurHopper.disable() end
-      end
-    end) or nil,
-
-    -- 🔹 Server Hopper toggle (calls hopper on toggle)
-    onServerHopperToggle = (profile.ui.serverHopper and function(v)
-      local on = (v ~= nil) and v or false
-      if on and serverHopper and serverHopper.hopToDifferentServer then
-        task.spawn(serverHopper.hopToDifferentServer)
-      end
     end) or nil,
 
     -- (optional) Dungeon hooks
