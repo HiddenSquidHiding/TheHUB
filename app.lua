@@ -33,17 +33,17 @@ local function r(name)
 end
 
 -- Optional modules (loaded if present)
-local UI          = r("ui_rayfield")
-local gamesCfg    = r("games")
-local farm        = r("farm")
-local smart       = r("smart_target")
-local merchants   = r("merchants")
-local crates      = r("crates")
-local antiAFK     = r("anti_afk")
-local redeem      = r("redeem_unredeemed_codes")
-local fastlevel   = r("fastlevel")
-local dungeonBE   = r("dungeon_be")
-local sahurHopper = r("sahur_hopper")
+local UI        = r("ui_rayfield")
+local gamesCfg  = r("games")
+local farm      = r("farm")
+local smart     = r("smart_target")
+local merchants = r("merchants")
+local crates    = r("crates")
+local antiAFK   = r("anti_afk")
+local redeem    = r("redeem_unredeemed_codes")
+local fastlevel = r("fastlevel")
+local dungeonBE = r("dungeon_be")
+local sahurHopper = r("sahur_hopper")  -- 🔹 NEW: Sahur hopper
 
 -- 🔹 NEW: load solo.lua at boot so the Private Server button can call it later.
 -- IMPORTANT: your solo.lua must NOT teleport on load; it should only define _G.TeleportToPrivateServer.
@@ -58,6 +58,7 @@ local function profileFromGames()
       autoFarm = true, smartFarm = false,
       merchants = false, crates = false, antiAFK = true,
       redeemCodes = true, fastlevel = true, privateServer = true, -- keep on
+      sahurHopper = true,  -- 🔹 NEW: Enable Sahur Hopper
       dungeonAuto = false, dungeonReplay = false,
     },
   }
@@ -82,104 +83,44 @@ function App.start()
   note("[app.lua]", ("profile: %s (key=%s)"):format(profile.name or "?", key), 3)
 
   if not UI or type(UI.build) ~= "function" then
-    note("[ui_rayfield]", "Rayfield failed to load (ui_rayfield.lua missing or build() not found).", 6)
+    note("[ui_rayfield]", "Rayfield failed to load (ui_rayfield.lua missing or build() not found)", 5)
     return
   end
 
-  pcall(function() if farm and farm.getMonsterModels then farm.getMonsterModels() end end)
+  -- Build UI with hooks
+  local h = {
+    -- Picker hooks (for farm/smart_target)
+    picker_getOptions = (farm and farm.getMonsterModels) or (smart and smart.getOptions),
+    picker_getSelected = (farm and farm.getSelected) or (smart and smart.getSelected),
+    picker_setSelected = (farm and farm.setSelected) or (smart and smart.setSelected),
+    picker_clear = (farm and function() farm.setSelected({}) end) or (smart and smart.clear),
 
-  local autoFarmOn, smartOn, fastOn = false, false, false
-
-  local lastLbl, lastAt = nil, 0
-  local function setCurrentTarget(s)
-    s = s or "Current Target: None"
-    local now = tick()
-    if s==lastLbl and now-lastAt<0.15 then return end
-    lastLbl, lastAt = s, now
-    if App.UI and App.UI.setCurrentTarget then pcall(App.UI.setCurrentTarget, s) end
-  end
-
-  -- Picker adapters for UI
-  local function picker_fetch(searchText)
-    if not farm then return {} end
-    if type(farm.filterMonsterModels) == "function" then
-      local ok, list = pcall(farm.filterMonsterModels, searchText or "")
-      if ok and type(list) == "table" then
-        local out = {}
-        for _, v in ipairs(list) do if typeof(v) == "string" then table.insert(out, v) end end
-        return out
-      end
-    elseif type(farm.getMonsterModels) == "function" then
-      local ok, list = pcall(farm.getMonsterModels)
-      if ok and type(list) == "table" then
-        local out = {}
-        local text = tostring(searchText or ""):lower()
-        for _, v in ipairs(list) do
-          if typeof(v) == "string" and (text=="" or v:lower():find(text, 1, true)) then
-            table.insert(out, v)
-          end
-        end
-        return out
-      end
-    end
-    return {}
-  end
-  local function picker_getSelected()
-    if farm and type(farm.getSelected) == "function" then
-      local ok, sel = pcall(farm.getSelected)
-      if ok and type(sel) == "table" then return sel end
-    end
-    return {}
-  end
-  local function picker_setSelected(list)
-    if farm and type(farm.setSelected) == "function" then pcall(farm.setSelected, list or {}) end
-  end
-  local function picker_clear() picker_setSelected({}) end
-
-  local function startAutoFarmLoop()
-    if not farm or type(farm.runAutoFarm) ~= "function" then
-      note("Auto-Farm", "farm.lua missing", 4); return
-    end
-    if type(farm.setupAutoAttackRemote) == "function" then pcall(farm.setupAutoAttackRemote) end
-    task.spawn(function()
-      farm.runAutoFarm(function() return autoFarmOn end, setCurrentTarget)
-    end)
-  end
-
-  -- Build UI
-  App.UI = UI.build({
-    picker_getOptions = picker_fetch,
-    picker_getSelected = picker_getSelected,
-    picker_setSelected = picker_setSelected,
-    picker_clear = picker_clear,
-
+    -- Farm toggles
     onAutoFarmToggle = (profile.ui.autoFarm and function(v)
-      autoFarmOn = (v ~= nil) and v or (not autoFarmOn)
-      if autoFarmOn then startAutoFarmLoop() else setCurrentTarget("Current Target: None") end
+      local on = (v ~= nil) and v or false
+      if on and farm and farm.setupAutoAttackRemote then farm.setupAutoAttackRemote() end
+      if farm and farm.runAutoFarm then
+        task.spawn(function() farm.runAutoFarm(function() return on end, App.UI and App.UI.setCurrentTarget) end)
+      end
     end) or nil,
-
     onSmartFarmToggle = (profile.ui.smartFarm and function(v)
-      smartOn = (v ~= nil) and v or (not smartOn)
-      if smartOn then
-        if smart and type(smart.runSmartFarm) == "function" then
-          task.spawn(function()
-            smart.runSmartFarm(function() return smartOn end, setCurrentTarget, { safetyBuffer=0.8, refreshInterval=0.05 })
-          end)
-        else note("Smart Farm","smart_target.lua missing",4) end
-      else setCurrentTarget("Current Target: None") end
+      local on = (v ~= nil) and v or false
+      if smart and smart.toggle then smart.toggle(on) end
     end) or nil,
 
+    -- Anti-AFK
     onToggleAntiAFK = (profile.ui.antiAFK and function(v)
       local on = (v ~= nil) and v or false
-      if antiAFK and antiAFK.enable and antiAFK.disable then
+      if antiAFK and antiAFK.enable then
         if on then antiAFK.enable() else antiAFK.disable() end
-      else note("Anti-AFK","anti_afk.lua missing",4) end
+      end
     end) or nil,
 
+    -- Merchants
     onToggleMerchant1 = (profile.ui.merchants and function(v)
       local on = (v ~= nil) and v or false
       if merchants and merchants.autoBuyLoop and on then
-        task.spawn(function() merchants.autoBuyLoop("SmelterMerchantService", function() return on end, function() end) end)
+        task.spawn(function() merchants.autoBuyLoop("SmelterMerchantService1", function() return on end, function() end) end)
       end
     end) or nil,
     onToggleMerchant2 = (profile.ui.merchants and function(v)
@@ -189,6 +130,7 @@ function App.start()
       end
     end) or nil,
 
+    -- Crates
     onToggleCrates = (profile.ui.crates and function(v)
       local on = (v ~= nil) and v or false
       if crates and crates.autoOpenCratesEnabledLoop and on then
@@ -196,13 +138,15 @@ function App.start()
       end
     end) or nil,
 
+    -- Redeem
     onRedeemCodes = (profile.ui.redeemCodes and function()
       if redeem and redeem.run then task.spawn(function() redeem.run({dryRun=false,concurrent=true,delayBetween=0.25}) end)
       else note("Codes","redeem_unredeemed_codes.lua missing",4) end
     end) or nil,
 
+    -- FastLevel
     onFastLevelToggle = (profile.ui.fastlevel and function(v)
-      fastOn = (v ~= nil) and v or (not fastOn)
+      local fastOn = (v ~= nil) and v or (not fastOn)
       if fastOn then
         local sahurName = "Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Sarur"
         local list = { sahurName }
@@ -215,6 +159,13 @@ function App.start()
         pcall(function() if farm and farm.setFastLevelEnabled then farm.setFastLevelEnabled(false) end end)
         autoFarmOn = false
         if App.UI and App.UI.setAutoFarm then pcall(App.UI.setAutoFarm, false) end
+      end
+    end) or nil,
+
+    -- 🔹 Sahur Hopper (new)
+    onSahurHopperToggle = (profile.ui.sahurHopper and function(v)
+      if sahurHopper and sahurHopper.enable then
+        if v then sahurHopper.enable() else sahurHopper.disable() end
       end
     end) or nil,
 
@@ -248,7 +199,9 @@ function App.start()
         dungeonBE.init(); dungeonBE.setReplay(on)
       end
     end) or nil,
-  })
+  }
+
+  App.UI = UI.build(h)
 
   note("🌲 WoodzHUB", "Rayfield UI loaded.", 3)
 end
