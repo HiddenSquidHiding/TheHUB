@@ -153,6 +153,11 @@ function M.build(h)
     Options:CreateToggle({ Name="Auto Sahur Server Hop", CurrentValue=false, Callback=function(v) h.onSahurHopperToggle(v) end })
   end
 
+  -- 🔹 Server Hopper toggle (new)
+  if h.onServerHopperToggle then
+    Options:CreateToggle({ Name="Server Hopper", CurrentValue=false, Callback=function(v) h.onServerHopperToggle(v) end })
+  end
+
   -- 🔹 Private Server button (uses solo.lua -> _G.TeleportToPrivateServer)
   if h.onPrivateServer then
     Options:CreateButton({ Name = "Private Server", Callback = function() h.onPrivateServer() end })
