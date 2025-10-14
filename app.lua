@@ -1,9 +1,5 @@
 -- app.lua — HTTP-friendly hub core (exports start()).
--- Works with init.lua that defines _G.__WOODZ_REQUIRE(name)
 
-----------------------------------------------------------------------
--- Minimal utils injection (so farm.lua / others won't crash)
-----------------------------------------------------------------------
 local StarterGui = game:GetService("StarterGui")
 _G.__WOODZ_UTILS = _G.__WOODZ_UTILS or {
   notify = function(title, msg, dur)
@@ -26,12 +22,8 @@ _G.__WOODZ_UTILS = _G.__WOODZ_UTILS or {
     end
   end,
 }
-
 local function note(t, m, d) _G.__WOODZ_UTILS.notify(t, m, d or 3) end
 
-----------------------------------------------------------------------
--- HTTP "require"
-----------------------------------------------------------------------
 local function r(name)
   local hook = rawget(_G, "__WOODZ_REQUIRE")
   if type(hook) ~= "function" then return nil end
@@ -39,9 +31,6 @@ local function r(name)
   return ok and mod or nil
 end
 
-----------------------------------------------------------------------
--- Optional modules (never hard-crash if missing)
-----------------------------------------------------------------------
 local UI        = r("ui_rayfield")
 local gamesCfg  = r("games")
 local farm      = r("farm")
@@ -53,9 +42,6 @@ local redeem    = r("redeem_unredeemed_codes")
 local fastlevel = r("fastlevel")
 local dungeonBE = r("dungeon_be")
 
-----------------------------------------------------------------------
--- Profile from games.lua
-----------------------------------------------------------------------
 local function profileFromGames()
   local default = {
     name = "Generic",
@@ -63,7 +49,7 @@ local function profileFromGames()
       modelPicker = true, currentTarget = true,
       autoFarm = true, smartFarm = false,
       merchants = false, crates = false, antiAFK = true,
-      redeemCodes = true, fastlevel = true, privateServer = false,
+      redeemCodes = true, fastlevel = true, privateServer = true, -- enable by default
       dungeonAuto = false, dungeonReplay = false,
     },
   }
@@ -78,9 +64,6 @@ local function profileFromGames()
   return p, k
 end
 
-----------------------------------------------------------------------
--- App
-----------------------------------------------------------------------
 local App = {}
 
 function App.start()
@@ -95,13 +78,10 @@ function App.start()
     return
   end
 
-  -- Prime farm model list once (best-effort)
   pcall(function() if farm and farm.getMonsterModels then farm.getMonsterModels() end end)
 
-  -- state
   local autoFarmOn, smartOn, fastOn = false, false, false
 
-  -- label setter (throttled)
   local lastLbl, lastAt = nil, 0
   local function setCurrentTarget(s)
     s = s or "Current Target: None"
@@ -111,7 +91,6 @@ function App.start()
     if App.UI and App.UI.setCurrentTarget then pcall(App.UI.setCurrentTarget, s) end
   end
 
-  -- farm wrappers for UI model picker
   local function picker_fetch(searchText)
     if not farm then return {} end
     if type(farm.filterMonsterModels) == "function" then
@@ -144,19 +123,13 @@ function App.start()
     return {}
   end
   local function picker_setSelected(list)
-    if farm and type(farm.setSelected) == "function" then
-      pcall(farm.setSelected, list or {})
-    end
+    if farm and type(farm.setSelected) == "function" then pcall(farm.setSelected, list or {}) end
   end
-  local function picker_clear()
-    picker_setSelected({})
-  end
+  local function picker_clear() picker_setSelected({}) end
 
-  -- Start Auto-Farm loop
   local function startAutoFarmLoop()
     if not farm or type(farm.runAutoFarm) ~= "function" then
-      note("Auto-Farm", "farm.lua missing", 4)
-      return
+      note("Auto-Farm", "farm.lua missing", 4); return
     end
     if type(farm.setupAutoAttackRemote) == "function" then pcall(farm.setupAutoAttackRemote) end
     task.spawn(function()
@@ -164,25 +137,17 @@ function App.start()
     end)
   end
 
-  -- build UI
   App.UI = UI.build({
-    -- Model picker plumbing
     picker_getOptions = picker_fetch,
     picker_getSelected = picker_getSelected,
     picker_setSelected = picker_setSelected,
     picker_clear = picker_clear,
 
-    -- Auto-Farm
     onAutoFarmToggle = (profile.ui.autoFarm and function(v)
       autoFarmOn = (v ~= nil) and v or (not autoFarmOn)
-      if autoFarmOn then
-        startAutoFarmLoop()
-      else
-        setCurrentTarget("Current Target: None")
-      end
+      if autoFarmOn then startAutoFarmLoop() else setCurrentTarget("Current Target: None") end
     end) or nil,
 
-    -- Smart Farm
     onSmartFarmToggle = (profile.ui.smartFarm and function(v)
       smartOn = (v ~= nil) and v or (not smartOn)
       if smartOn then
@@ -190,15 +155,10 @@ function App.start()
           task.spawn(function()
             smart.runSmartFarm(function() return smartOn end, setCurrentTarget, { safetyBuffer=0.8, refreshInterval=0.05 })
           end)
-        else
-          note("Smart Farm","smart_target.lua missing",4)
-        end
-      else
-        setCurrentTarget("Current Target: None")
-      end
+        else note("Smart Farm","smart_target.lua missing",4) end
+      else setCurrentTarget("Current Target: None") end
     end) or nil,
 
-    -- Anti-AFK
     onToggleAntiAFK = (profile.ui.antiAFK and function(v)
       local on = (v ~= nil) and v or false
       if antiAFK and antiAFK.enable and antiAFK.disable then
@@ -206,7 +166,6 @@ function App.start()
       else note("Anti-AFK","anti_afk.lua missing",4) end
     end) or nil,
 
-    -- Merchants
     onToggleMerchant1 = (profile.ui.merchants and function(v)
       local on = (v ~= nil) and v or false
       if merchants and merchants.autoBuyLoop and on then
@@ -220,7 +179,6 @@ function App.start()
       end
     end) or nil,
 
-    -- Crates
     onToggleCrates = (profile.ui.crates and function(v)
       local on = (v ~= nil) and v or false
       if crates and crates.autoOpenCratesEnabledLoop and on then
@@ -228,26 +186,18 @@ function App.start()
       end
     end) or nil,
 
-    -- Codes
     onRedeemCodes = (profile.ui.redeemCodes and function()
       if redeem and redeem.run then task.spawn(function() redeem.run({dryRun=false,concurrent=true,delayBetween=0.25}) end)
       else note("Codes","redeem_unredeemed_codes.lua missing",4) end
     end) or nil,
 
-    -- Instant Level 70+ (force Sahur target + ensure Auto-Farm running)
     onFastLevelToggle = (profile.ui.fastlevel and function(v)
       fastOn = (v ~= nil) and v or (not fastOn)
       if fastOn then
-        -- ensure Sahur-only selection
         local sahurName = "Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Sarur"
-        local list = { "To Sahur" } -- keep group shortcut too, farm.lua handles it
-        if farm and type(farm.setSelected) == "function" then
-          list = { sahurName } -- force exact
-          pcall(farm.setSelected, list)
-        end
-        -- tell farm we're in fastlevel mode if it supports it
+        local list = { sahurName }
+        pcall(function() if farm and farm.setSelected then farm.setSelected(list) end end)
         pcall(function() if farm and farm.setFastLevelEnabled then farm.setFastLevelEnabled(true) end end)
-        -- make sure Auto-Farm loop is on
         autoFarmOn = true
         if App.UI and App.UI.setAutoFarm then pcall(App.UI.setAutoFarm, true) end
         startAutoFarmLoop()
@@ -255,6 +205,37 @@ function App.start()
         pcall(function() if farm and farm.setFastLevelEnabled then farm.setFastLevelEnabled(false) end end)
         autoFarmOn = false
         if App.UI and App.UI.setAutoFarm then pcall(App.UI.setAutoFarm, false) end
+      end
+    end) or nil,
+
+    -- 🔹 Private Server button handler
+    onPrivateServer = (profile.ui.privateServer and function()
+      task.spawn(function()
+        local f = rawget(_G, "TeleportToPrivateServer")
+        if type(f) ~= "function" then
+          note("🌲 Private Server", "Run solo.lua first to set up the function!", 4)
+          return
+        end
+        local ok, err = pcall(f)
+        if ok then
+          note("🌲 Private Server", "Teleport initiated to private server!", 3)
+        else
+          note("🌲 Private Server", "Failed to teleport: " .. tostring(err), 5)
+        end
+      end)
+    end) or nil,
+
+    -- (optional) Dungeon hooks if you enable them in games.lua
+    onDungeonAutoToggle = (profile.ui.dungeonAuto and function(v)
+      local on = (v ~= nil) and v or false
+      if dungeonBE and dungeonBE.init and dungeonBE.setAuto then
+        dungeonBE.init(); dungeonBE.setAuto(on)
+      end
+    end) or nil,
+    onDungeonReplayToggle = (profile.ui.dungeonReplay and function(v)
+      local on = (v ~= nil) and v or false
+      if dungeonBE and dungeonBE.init and dungeonBE.setReplay then
+        dungeonBE.init(); dungeonBE.setReplay(on)
       end
     end) or nil,
   })
