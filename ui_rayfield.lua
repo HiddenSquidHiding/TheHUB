@@ -167,25 +167,24 @@ function M.build(h)
     Options:CreateToggle({ Name="Dungeon Auto-Replay", CurrentValue=false, Callback=function(v) h.onDungeonReplayToggle(v) end })
   end
 
-  ------------------------------------------------------------------
-  -- Extra
-  ------------------------------------------------------------------
-  Extra:CreateSection("General")
-  
-  -- ✅ Sahur auto-hop toggle
-  if h.onSahurToggle then
-    local tog = Extra:CreateToggle({
-      Name = "Auto Sahur (Auto-Hop)",
-      CurrentValue = false,
-      Flag = "AutoSahur",
-      Callback = function(enabled)
-        if h and h.onSahurToggle then
-          h.onSahurToggle(enabled)
-        end
-      end,
-    })
+------------------------------------------------------------------
+-- Extra
+------------------------------------------------------------------
+Extra:CreateSection("General")
 
-  -- optional setter so app.lua can sync UI state
+-- ✅ Sahur auto-hop toggle
+if h.onSahurToggle then
+  local tog = Extra:CreateToggle({
+    Name = "Auto Sahur (Auto-Hop)",
+    CurrentValue = false,
+    Flag = "AutoSahur",
+    Callback = function(enabled)
+      if h and h.onSahurToggle then
+        h.onSahurToggle(enabled)
+      end
+    end,
+  })
+  -- optional setter if you want to sync from app.lua later
   M.setSahur = function(v)
     pcall(function() tog:Set(v and true or false) end)
   end
