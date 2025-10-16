@@ -20,12 +20,19 @@ function M.build(h)
   h = h or {}
 
   local Window = Rayfield:CreateWindow({
-    Name = "🌲 WoodzHUB — Rayfield",
-    LoadingTitle = "WoodzHUB",
-    LoadingSubtitle = "Rayfield UI",
-    ConfigurationSaving = { Enabled = false },
-    KeySystem = false,
-  })
+  Name = "🌲 WoodzHUB",
+  LoadingTitle = "WoodzHUB",
+  LoadingSubtitle = "Rayfield UI",
+  KeySystem = false,
+
+  -- ✅ enable persistence
+  ConfigurationSaving = {
+    Enabled = true,
+    FolderName = "WoodzHUB",   -- folder in workspace
+    FileName = "settings"      -- config file name
+  },
+})
+
 
   local Main    = Window:CreateTab("Main")
   local Options = Window:CreateTab("Options")
