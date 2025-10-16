@@ -23,7 +23,7 @@ local WANT = {
   "data_monsters.lua",
   "solo.lua",
   "sahur_hopper.lua",
-  "server_hopper.lua",  -- Added for server hopping
+  "server_hopper.lua",  -- NEW: For server hop button
 }
 
 ----------------------------------------------------------------------
