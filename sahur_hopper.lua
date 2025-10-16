@@ -54,41 +54,91 @@ M.maxFarmBurstSeconds   = 120
 M.sahurModelName        = "Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Sarur"
 M.maxCleanLobbyAttempts = 10          -- how many hop attempts to find a clean lobby
 M.settleAfterHopSeconds = 2.5         -- let players list populate before re-check
+M.debug                 = true        -- show lobby level reads in notifications
+
+-- Optional: custom reader if your game stores level somewhere unique.
+-- Set this to a function(player) -> number?
+-- M.levelReader = function(player) ... end
 -- ===================================================
 
 -- ---------- Level helpers ----------
 local function getPlayerLevel(player)
+  -- 0) Custom hook (if provided)
+  if type(M.levelReader) == "function" then
+    local ok, n = pcall(M.levelReader, player)
+    if ok and typeof(n) == "number" then return n end
+  end
+
+  -- 1) leaderstats (common)
   local ls = player:FindFirstChild("leaderstats")
   if ls then
-    local lv = ls:FindFirstChild("Level")
-    if lv and lv:IsA("IntValue") then return lv.Value end
+    local cand = ls:FindFirstChild("Level") or ls:FindFirstChild("LV") or ls:FindFirstChild("Lvl") or ls:FindFirstChild("Rank")
+    if cand then
+      if cand:IsA("IntValue") or cand:IsA("NumberValue") then
+        return cand.Value
+      elseif cand:IsA("StringValue") then
+        local n = tonumber((cand.Value or ""):match("%d+"))
+        if n then return n end
+      end
+    end
+    -- fallback: any number-like child under leaderstats
+    for _, v in ipairs(ls:GetChildren()) do
+      if v:IsA("IntValue") or v:IsA("NumberValue") then return v.Value end
+      if v:IsA("StringValue") then
+        local n = tonumber((v.Value or ""):match("%d+"))
+        if n then return n end
+      end
+    end
   end
-  local attr = player:GetAttribute("Level") or player:GetAttribute("level")
-  if typeof(attr) == "number" then return attr end
-  local data = player:FindFirstChild("Data")
-  if data and data:IsA("Folder") then
-    local lv2 = data:FindFirstChild("Level")
-    if lv2 and (lv2:IsA("IntValue") or lv2:IsA("NumberValue")) then return lv2.Value end
+
+  -- 2) Attributes
+  local a = player:GetAttribute("Level") or player:GetAttribute("level") or player:GetAttribute("Lvl")
+  if typeof(a) == "number" then return a end
+  if typeof(a) == "string" then
+    local n = tonumber(a:match("%d+"))
+    if n then return n end
   end
-  return nil
+
+  -- 3) Common custom folders
+  for _, folderName in ipairs({ "Stats", "Data", "Profile" }) do
+    local f = player:FindFirstChild(folderName)
+    if f then
+      local k = f:FindFirstChild("Level") or f:FindFirstChild("Lvl") or f:FindFirstChild("Rank")
+      if k then
+        if k:IsA("IntValue") or k:IsA("NumberValue") then return k.Value end
+        if k:IsA("StringValue") then
+          local n = tonumber((k.Value or ""):match("%d+"))
+          if n then return n end
+        end
+      end
+    end
+  end
+
+  return nil -- unknown
 end
 
-local function myLevel()
-  return getPlayerLevel(LocalPlayer) or -math.huge
-end
-
--- true if someone (not you) is strictly above threshold
 local function lobbyHasHighLevel(threshold)
   threshold = threshold or M.levelThreshold
-  local offenders = {}
+  local offenders, seen = {}, {}
+
   for _, plr in ipairs(Players:GetPlayers()) do
     if plr ~= LocalPlayer then
       local lv = getPlayerLevel(plr)
+      table.insert(seen, { name = plr.Name, level = lv })
       if lv and lv > threshold then
         table.insert(offenders, { name = plr.Name, level = lv })
       end
     end
   end
+
+  if M.debug then
+    local parts = {}
+    for _, s in ipairs(seen) do
+      table.insert(parts, (s.name .. ":" .. tostring(s.level or "nil")))
+    end
+    note("Sahur-Debug", "Lobby levels → " .. table.concat(parts, ", "), 5)
+  end
+
   return #offenders > 0, offenders
 end
 -- -----------------------------------
@@ -163,7 +213,7 @@ local function doHop(reason)
 end
 -- ----------------------------------
 
--- ✅ Ensure lobby is clean AND Sahur exists before farming.
+-- Ensure lobby is clean AND Sahur exists before farming.
 local function ensureReadyLobby()
   for attempt = 1, (M.maxCleanLobbyAttempts or 8) do
     -- allow player list to populate after a join/hop
@@ -172,7 +222,9 @@ local function ensureReadyLobby()
     local bad, offenders = lobbyHasHighLevel(M.levelThreshold)
     if bad then
       local parts = {}
-      for _, o in ipairs(offenders) do table.insert(parts, o.name .. " (Lv " .. tostring(o.level) .. ")") end
+      for _, o in ipairs(offenders) do
+        table.insert(parts, o.name .. " (Lv " .. tostring(o.level) .. ")")
+      end
       note("Sahur", "High-level present: " .. table.concat(parts, ", "), 4)
       doHop("high-level in lobby")
     else
@@ -245,7 +297,6 @@ local function safeFarmBurstAndWatch()
 
   return hopRequested
 end
--- ==============================================
 
 -- ================= Main loop ==================
 local function loop()
