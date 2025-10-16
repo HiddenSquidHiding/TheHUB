@@ -282,6 +282,14 @@ function App.start()
       end
     end)(),
 
+    onSahurToggle = function(state)
+      if state then
+        sahur.enable()
+      else
+        sahur.disable()
+      end
+    end,
+
     -- (optional) Dungeon hooks
     onDungeonAutoToggle = (profile.ui.dungeonAuto and function(v)
       local on = (v ~= nil) and v or false
