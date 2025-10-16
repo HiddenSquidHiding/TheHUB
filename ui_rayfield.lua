@@ -171,7 +171,8 @@ function M.build(h)
   -- Extra
   ------------------------------------------------------------------
   Extra:CreateSection("General")
-
+  
+  -- ✅ Sahur auto-hop toggle
   if h.onSahurToggle then
     local tog = Extra:CreateToggle({
       Name = "Auto Sahur (Auto-Hop)",
@@ -179,10 +180,16 @@ function M.build(h)
       Flag = "AutoSahur",
       Callback = function(enabled)
         if h and h.onSahurToggle then
-      h.onSahurToggle(enabled)
-    end
+          h.onSahurToggle(enabled)
+        end
+      end,
+    })
+
+  -- optional setter so app.lua can sync UI state
+  M.setSahur = function(v)
+    pcall(function() tog:Set(v and true or false) end)
   end
-  })
+end
         
   -- exposed helpers
   M.setCurrentTarget = function(text) pcall(function() lbl:Set(text or "Current Target: None") end) end
