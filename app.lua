@@ -265,29 +265,26 @@ function App.start()
       end)
     end) or nil,
 
-    -- Server hopper
-    onServerHopperToggle = (function()
-      return function()
-        task.spawn(function()
-          local hop = serverHopper and serverHopper.hopToDifferentServer
-          if type(hop) == "function" then
-            local ok, err = pcall(hop)
-            if not ok then
-              note("🌲 Server Hop", "Failed to hop: " .. tostring(err), 5)
-            end
-          else
-            note("🌲 Server Hop", "server_hopper module missing.", 4)
-          end
-        end)
+-- One-shot Server Hop button (optional; uses sahur_hopper if present)
+onServerHopperToggle = function()
+  task.spawn(function()
+    if sahurHopper and sahurHopper.hopNow then
+      local ok, err = pcall(sahurHopper.hopNow)
+      if not ok then
+        note("🌲 Server Hop", "Failed to hop: " .. tostring(err), 5)
       end
-    end)(),
+    else
+      note("🌲 Server Hop", "sahur_hopper module missing.", 4)
+    end
+  end)
+end,
 
+-- Sahur auto-hop toggle (✅ uses sahurHopper, not 'sahur')
 onSahurToggle = function(state)
   if not sahurHopper then
     note("Sahur", "sahur_hopper module missing or failed to load", 5)
     return
   end
-
   if state then
     sahurHopper.enable()
   else
