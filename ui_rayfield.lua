@@ -148,14 +148,9 @@ function M.build(h)
     Options:CreateToggle({ Name="Instant Level 70+ (Sahur only)", CurrentValue=false, Callback=function(v) h.onFastLevelToggle(v) end })
   end
 
-  -- 🔹 Sahur Hopper toggle (new)
-  if h.onSahurHopperToggle then
-    Options:CreateToggle({ Name="Auto Sahur Server Hop", CurrentValue=false, Callback=function(v) h.onSahurHopperToggle(v) end })
-  end
-
-  -- 🔹 Server Hopper toggle (new)
+  -- 🔹 Server Hop button (new)
   if h.onServerHopperToggle then
-    Options:CreateToggle({ Name="Server Hopper", CurrentValue=false, Callback=function(v) h.onServerHopperToggle(v) end })
+    Options:CreateButton({ Name = "Server Hop", Callback = function() h.onServerHopperToggle() end })
   end
 
   -- 🔹 Private Server button (uses solo.lua -> _G.TeleportToPrivateServer)
