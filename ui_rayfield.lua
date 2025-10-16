@@ -179,49 +179,57 @@ function M.build(h)
 ------------------------------------------------------------------
 Extra:CreateSection("General")
 
--- ✅ Sahur auto-hop toggle
+-- ✅ Sahur auto-hop toggle (with persistence)
 if h.onSahurToggle then
   local tog = Extra:CreateToggle({
-  Name = "Auto Sahur (Auto-Hop)",
-  CurrentValue = false,
-  Flag = "AutoSahur",
-  Callback = function(enabled)
-    if h and h.onSahurToggle then h.onSahurToggle(enabled) end
-    -- save whenever the user flips it
-    pcall(function() Rayfield:SaveConfiguration() end)
-  end,
-})
--- helper so we can set it programmatically on load
-M.setSahur = function(v) pcall(function() tog:Set(v and true or false) end) end
-        
-  -- exposed helpers
-  M.setCurrentTarget = function(text) pcall(function() lbl:Set(text or "Current Target: None") end) end
-  M.destroy = function() pcall(function() Rayfield:Destroy() end) end
+    Name = "Auto Sahur (Auto-Hop)",
+    CurrentValue = false,
+    Flag = "AutoSahur",
+    Callback = function(enabled)
+      if h and h.onSahurToggle then
+        h.onSahurToggle(enabled)
+      end
+      -- save whenever the user flips it
+      pcall(function() Rayfield:SaveConfiguration() end)
+    end,
+  })
 
-  return M
+  -- helper so app.lua can set the toggle programmatically
+  M.setSahur = function(v)
+    pcall(function() tog:Set(v and true or false) end)
+  end
 end
 
--- Load saved config (must be AFTER all controls are created)
-pcall(function() Rayfield:LoadConfiguration() end)
+-- exposed helpers (label 'lbl' was created earlier in the Farming section)
+M.setCurrentTarget = function(text)
+  pcall(function() lbl:Set(text or "Current Target: None") end)
+end
 
--- If AutoSahur was saved ON, reflect it in the UI and start the loop
+M.destroy = function()
+  pcall(function() Rayfield:Destroy() end)
+end
+
+-- 🔄 Load saved config AFTER all controls exist, then apply AutoSahur
+pcall(function() Rayfield:LoadConfiguration() end)
 task.defer(function()
   local flags = rawget(Rayfield, "Flags")
-  local savedOn =
-      flags
-      and (
-        -- different Rayfield builds expose one of these
-        (flags.AutoSahur and flags.AutoSahur.CurrentValue)
-        or (flags.AutoSahur and flags.AutoSahur.Value)
-        or (flags.AutoSahur and flags.AutoSahur.Enabled)
-      )
+  local wasOn =
+    flags
+    and (
+      (flags.AutoSahur and flags.AutoSahur.CurrentValue)
+      or (flags.AutoSahur and flags.AutoSahur.Value)
+      or (flags.AutoSahur and flags.AutoSahur.Enabled)
+    )
 
-  if savedOn then
-    -- 1) visually set the toggle (won't always fire the callback)
-    if M.setSahur then pcall(function() M.setSahur(true) end) end
-    -- 2) start your logic (the callback equivalent)
-    if h and h.onSahurToggle then pcall(function() h.onSahurToggle(true) end) end
+  if wasOn then
+    if M.setSahur then pcall(function() M.setSahur(true) end) end   -- reflect in UI
+    if h and h.onSahurToggle then pcall(function() h.onSahurToggle(true) end) end -- actually start loop
   end
 end)
 
+-- ✅ return from the builder function
+return M
+end  -- <== closes function M.build(h)
+
+-- ✅ return the module table
 return M
