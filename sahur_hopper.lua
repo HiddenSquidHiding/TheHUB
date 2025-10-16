@@ -1,13 +1,16 @@
 -- sahur_hopper.lua
--- Farm Sahur and hop automatically using server_hopper.hopToDifferentServer()
--- Hops when lobby is bad, when Sahur dies, or when Sahur isn't found.
--- Enforces a "clean lobby" (no one above threshold except you) BEFORE farming.
+-- Auto-hops using server_hopper.hopToDifferentServer() when:
+-- 1) lobby has anyone > level threshold (except you),
+-- 2) Sahur model isn't present,
+-- 3) Sahur dies (killed/removed).
+-- Also farms Sahur between checks using your farm.runAutoFarm().
 
 local Players = game:GetService("Players")
 local RS      = game:GetService("ReplicatedStorage")
 local LocalPlayer = Players.LocalPlayer
 
--- ---------- robust require (same as app.lua) ----------
+----------------------------------------------------------------------
+-- Robust require (mirrors app.lua _G.__WOODZ_REQUIRE fallback chain)
 local function r(name)
   local hook = rawget(_G, "__WOODZ_REQUIRE")
   if type(hook) == "function" then
@@ -27,7 +30,7 @@ local function r(name)
   end
   return nil
 end
--- ------------------------------------------------------
+----------------------------------------------------------------------
 
 local function note(title, text, dur)
   if _G and _G.__WOODZ_UTILS and type(_G.__WOODZ_UTILS.notify) == "function" then
@@ -37,21 +40,23 @@ local function note(title, text, dur)
   end
 end
 
+-- Modules
 local farm         = r("farm")               -- expects runAutoFarm, setupAutoAttackRemote, setSelected
 local serverHopper = r("server_hopper")      -- expects hopToDifferentServer()
 
 local M = {}
 
 -- ===================== Config ======================
-M.levelThreshold       = 84          -- ✅ your requested ceiling
-M.recheckInterval      = 3
-M.postHopCooldown      = 6
-M.maxFarmBurstSeconds  = 120
-M.sahurModelName       = "Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Sarur"
-M.maxCleanLobbyAttempts = 8          -- tries before giving up for this cycle
+M.levelThreshold        = 84          -- hop if ANYONE > 84 (except you)
+M.recheckInterval       = 3
+M.postHopCooldown       = 6
+M.maxFarmBurstSeconds   = 120
+M.sahurModelName        = "Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Sarur"
+M.maxCleanLobbyAttempts = 10          -- how many hop attempts to find a clean lobby
+M.settleAfterHopSeconds = 2.5         -- let players list populate before re-check
 -- ===================================================
 
--- Find player level (adjust if your game stores differently)
+-- ---------- Level helpers ----------
 local function getPlayerLevel(player)
   local ls = player:FindFirstChild("leaderstats")
   if ls then
@@ -72,27 +77,28 @@ local function myLevel()
   return getPlayerLevel(LocalPlayer) or -math.huge
 end
 
-function M.isBadLobby()
-  local me = LocalPlayer
-  local myLv = myLevel()
+-- true if someone (not you) is strictly above threshold
+local function lobbyHasHighLevel(threshold)
+  threshold = threshold or M.levelThreshold
+  local offenders = {}
   for _, plr in ipairs(Players:GetPlayers()) do
-    if plr ~= me then
+    if plr ~= LocalPlayer then
       local lv = getPlayerLevel(plr)
-      if lv and lv > M.levelThreshold and lv >= myLv then
-        -- anyone strictly above threshold (and not you) counts as bad
-        return true, ("High-level detected: %s (Lv %d)"):format(plr.Name, lv)
+      if lv and lv > threshold then
+        table.insert(offenders, { name = plr.Name, level = lv })
       end
     end
   end
-  return false, "Lobby clean"
+  return #offenders > 0, offenders
 end
+-- -----------------------------------
 
--- ====== Sahur NPC detection & death watcher =======
+-- ---------- Sahur detection ----------
 local function defaultFindSahur()
-  -- exact path anywhere under workspace
+  -- exact name anywhere
   local m = workspace:FindFirstChild(M.sahurModelName, true)
   if m and m:IsA("Model") then return m end
-  -- fuzzy contains "Sahur"/"Sarur"
+  -- fuzzy contains
   for _, d in ipairs(workspace:GetDescendants()) do
     if d:IsA("Model") then
       local n = string.lower(d.Name)
@@ -111,16 +117,16 @@ local function findSahur()
   end
   return defaultFindSahur()
 end
+-- -------------------------------------
 
--- Wait until the current Sahur dies or the model disappears, or timeout
+-- wait until Sahur dies/removed or timeout
 local function waitForSahurDeath(timeoutSeconds)
   local deadline = os.clock() + (timeoutSeconds or 60)
   local target = findSahur()
   if not target then return false, "no target found" end
 
   local hum = target:FindFirstChildOfClass("Humanoid")
-  local killed = false
-  local gone = false
+  local killed, gone = false, false
 
   local con1, con2
   if hum then
@@ -139,66 +145,75 @@ local function waitForSahurDeath(timeoutSeconds)
 
   return killed or gone, (killed and "killed") or (gone and "removed") or "timeout"
 end
--- ==================================================
 
--- ================= Main loop pieces ===============
+-- ---------- Hop wrapper ----------
+local function doHop(reason)
+  if not serverHopper or type(serverHopper.hopToDifferentServer) ~= "function" then
+    note("Sahur", "server_hopper module missing or invalid.", 5)
+    return false
+  end
+  note("Sahur", "Hopping server" .. (reason and (" (" .. reason .. ")") or "") .. "...", 3)
+  local ok, err = pcall(serverHopper.hopToDifferentServer)
+  if not ok then
+    note("Sahur", "Hop failed: " .. tostring(err), 6)
+    return false
+  end
+  task.wait(M.postHopCooldown)
+  return true
+end
+-- ----------------------------------
+
+-- ✅ Ensure lobby is clean AND Sahur exists before farming.
+local function ensureReadyLobby()
+  for attempt = 1, (M.maxCleanLobbyAttempts or 8) do
+    -- allow player list to populate after a join/hop
+    task.wait(M.settleAfterHopSeconds or 2)
+
+    local bad, offenders = lobbyHasHighLevel(M.levelThreshold)
+    if bad then
+      local parts = {}
+      for _, o in ipairs(offenders) do table.insert(parts, o.name .. " (Lv " .. tostring(o.level) .. ")") end
+      note("Sahur", "High-level present: " .. table.concat(parts, ", "), 4)
+      doHop("high-level in lobby")
+    else
+      local target = findSahur()
+      if not target then
+        note("Sahur", "No Sahur model found in this server; hopping...", 3)
+        doHop("Sahur missing")
+      else
+        -- clean lobby + sahur present = ready
+        return true
+      end
+    end
+  end
+  note("Sahur", "Could not find a clean Sahur lobby after multiple tries.", 5)
+  return false
+end
+
+-- ====== Farming burst + boss-death watch ======
 local running = false
 local warnedNoFarm = false
 local farmSetupDone = false
 
-local function doHop(reason)
-  if not serverHopper or type(serverHopper.hopToDifferentServer) ~= "function" then
-    note("Sahur", "server_hopper module missing or invalid.", 5)
-    return
-  end
-  note("Sahur", "Hopping server" .. (reason and (" (" .. reason .. ")") or "") .. "...", 4)
-  local ok, err = pcall(serverHopper.hopToDifferentServer)
-  if not ok then
-    note("Sahur", "Hop failed: " .. tostring(err), 6)
-    return
-  end
-  task.wait(M.postHopCooldown)
-end
-
--- ✅ NEW: ensure lobby is clean before proceeding; hop until it is (bounded attempts)
-local function ensureGoodLobby()
-  for attempt = 1, (M.maxCleanLobbyAttempts or 6) do
-    local bad, why = M.isBadLobby()
-    if not bad then
-      if attempt > 1 then
-        note("Sahur", "Lobby clean after " .. attempt .. " attempts.", 3)
-      end
-      return true
-    end
-    note("Sahur", "Bad lobby: " .. tostring(why) .. " → hopping (" .. attempt .. ")", 3)
-    doHop("bad lobby")
-    task.wait(1.0)
-  end
-  note("Sahur", "Gave up cleaning lobby for now.", 4)
-  return false
-end
-
--- Run a burst of farming and watch Sahur; return true if we should hop
 local function safeFarmBurstAndWatch()
-  -- if no Sahur model is present, hop right away
+  -- Make sure Sahur is still present; if gone, hop.
   local target = findSahur()
   if not target then
-    note("Sahur", "No Sahur model found; hopping...", 3)
+    note("Sahur", "Sahur not present anymore; hopping...", 3)
     return true
   end
 
-  -- Select Sahur so farm aims at it
+  -- aim at Sahur
   if type(farm) == "table" and type(farm.setSelected) == "function" and M.sahurModelName then
     pcall(function() farm.setSelected({ M.sahurModelName }) end)
   end
 
-  -- one-time remote setup
+  -- one-time setup
   if not farmSetupDone and type(farm) == "table" and type(farm.setupAutoAttackRemote) == "function" then
     pcall(farm.setupAutoAttackRemote)
     farmSetupDone = true
   end
 
-  -- Watch for death/vanish
   local hopRequested = false
   task.spawn(function()
     local ok, why = waitForSahurDeath(M.maxFarmBurstSeconds or 60)
@@ -230,30 +245,29 @@ local function safeFarmBurstAndWatch()
 
   return hopRequested
 end
+-- ==============================================
 
+-- ================= Main loop ==================
 local function loop()
   while running do
-    -- 0) Make sure lobby is clean before we do anything else
-    if not ensureGoodLobby() then
-      -- couldn't find a clean lobby after attempts; wait a bit and retry loop
+    -- 0) HARD GUARANTEE: Only proceed if clean lobby + Sahur present
+    if not ensureReadyLobby() then
+      -- couldn't prepare; wait and try again
       task.wait(M.recheckInterval)
-      continue
+    else
+      -- 1) Farm & watch; hop on death or if Sahur missing
+      local shouldHop = safeFarmBurstAndWatch()
+      if shouldHop then
+        doHop("Sahur killed or missing")
+        -- after hop, loop will re-run ensureReadyLobby()
+      end
+      task.wait(M.recheckInterval)
     end
-
-    -- 1) Farm & watch; hop on death or if Sahur missing
-    local shouldHop = safeFarmBurstAndWatch()
-    if shouldHop then
-      doHop("Sahur killed or missing")
-      -- After a hop, re-ensure we landed in a clean lobby
-      ensureGoodLobby()
-    end
-
-    task.wait(M.recheckInterval)
   end
 end
--- ================================================
+-- ==============================================
 
--- ================= Public API ====================
+-- ================= Public API =================
 function M.enable()
   if running then return end
   running = true
