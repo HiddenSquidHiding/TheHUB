@@ -182,7 +182,8 @@ function M.build(h)
       h.onSahurToggle(enabled)
     end
   end
-
+  })
+        
   -- exposed helpers
   M.setCurrentTarget = function(text) pcall(function() lbl:Set(text or "Current Target: None") end) end
   M.destroy = function() pcall(function() Rayfield:Destroy() end) end
