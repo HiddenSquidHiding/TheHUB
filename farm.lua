@@ -21,13 +21,12 @@ local utils = getUtils()
 -- otherwise it fetches https://.../data_monsters.lua using _G.WOODZ_BASE_URL
 local data
 do
-  local g = rawget(getfenv(), "_G")
-  if g and type(g.WOODZ_DATA_MONSTERS) == "table" then
-    data = g.WOODZ_DATA_MONSTERS
+  if _G and type(_G.WOODZ_DATA_MONSTERS) == "table" then
+    data = _G.WOODZ_DATA_MONSTERS
   end
 
   if not data then
-    local base = g and g.WOODZ_BASE_URL
+    local base = _G and _G.WOODZ_BASE_URL
     if type(base) == "string" and #base > 0 then
       local ok, src = pcall(function()
         return game:HttpGet((base:sub(-1) == "/" and base or (base .. "/")) .. "data_monsters.lua")
