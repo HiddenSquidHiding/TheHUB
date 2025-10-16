@@ -148,7 +148,7 @@ function M.build(h)
     Options:CreateToggle({ Name="Instant Level 70+ (Sahur only)", CurrentValue=false, Callback=function(v) h.onFastLevelToggle(v) end })
   end
 
-  -- 🔹 Server Hop button (new)
+  -- 🔹 Server Hopper button (new)
   if h.onServerHopperToggle then
     Options:CreateButton({ Name = "Server Hop", Callback = function() h.onServerHopperToggle() end })
   end
