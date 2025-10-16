@@ -4,10 +4,10 @@
 local Players = game:GetService("Players")
 local LocalPlayer = Players.LocalPlayer
 
--- ------------------------------------------------------------------
--- robust local require that mirrors app.lua's loader
+-- =========================
+-- robust local require (matches app.lua behavior)
 local function r(name)
-  -- 1) Use the global HTTP loader if present (same as app.lua)
+  -- 1) Try global HTTP loader (_G.__WOODZ_REQUIRE)
   local hook = rawget(_G, "__WOODZ_REQUIRE")
   if type(hook) == "function" then
     local ok, mod = pcall(hook, name)
@@ -21,7 +21,7 @@ local function r(name)
     if ok and mod then return mod end
   end
 
-  -- 3) Fallback to ReplicatedStorage/Modules if you keep modules there
+  -- 3) Optional: ReplicatedStorage/Modules fallback
   local RS = game:GetService("ReplicatedStorage")
   local folders = { RS:FindFirstChild("Modules"), RS }
   for _, folder in ipairs(folders) do
@@ -33,9 +33,9 @@ local function r(name)
 
   return nil
 end
--- ------------------------------------------------------------------
+-- =========================
 
--- Optional notify helper
+-- notify helper
 local function note(title, text, dur)
   if _G and _G.__WOODZ_UTILS and type(_G.__WOODZ_UTILS.notify) == "function" then
     _G.__WOODZ_UTILS.notify(title, text, dur or 3)
@@ -44,8 +44,8 @@ local function note(title, text, dur)
   end
 end
 
--- Import farm logic + dedicated server hopper
-local farm         = r("farm")               -- may be nil in some games
+-- modules
+local farm         = r("farm")               -- your farm module (runAutoFarm, setupAutoAttackRemote, setSelected)
 local serverHopper = r("server_hopper")      -- must expose hopToDifferentServer()
 
 local M = {}
@@ -53,13 +53,14 @@ local M = {}
 ---------------------------------------------------------------------
 -- Configuration
 ---------------------------------------------------------------------
-M.levelThreshold       = 120     -- lobbies with anyone >= this level are considered "bad"
+M.levelThreshold       = 120     -- lobbies with anyone >= this level are "bad"
 M.recheckInterval      = 4       -- seconds between loop iterations
 M.postHopCooldown      = 7       -- wait after hop is triggered
 M.maxFarmBurstSeconds  = 60      -- cap for a single farm burst
+M.sahurModelName       = "Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Sarur" -- what your farm expects
 
--- Find a player's level; tweak this for your game’s data model if needed
-local function getPlayerLevel(player: Player): number?
+-- get a player's level (tweak if your game stores it elsewhere)
+local function getPlayerLevel(player)
   local ls = player:FindFirstChild("leaderstats")
   if ls then
     local lv = ls:FindFirstChild("Level")
@@ -92,55 +93,44 @@ end
 ---------------------------------------------------------------------
 local running = false
 local warnedNoFarm = false
+local farmSetupDone = false
 
+-- run a short burst of your hub's farm.runAutoFarm
 local function safeFarmBurst()
-  if not farm then
+  if not farm or type(farm.runAutoFarm) ~= "function" then
     if not warnedNoFarm then
       warnedNoFarm = true
-      note("Sahur", "Farm module not found; skipping farm step.", 4)
+      note("Sahur", "farm.runAutoFarm not found; skipping farm step.", 4)
     end
     return
   end
 
-  local t0 = os.clock()
-
-  -- Prefer start()/stop() pattern
-  if type(farm.start) == "function" and type(farm.stop) == "function" then
-    local okStart, err = pcall(farm.start)
-    if not okStart then
-      note("Sahur", "farm.start failed: " .. tostring(err), 5)
-      return
-    end
-    while running and (os.clock() - t0) < M.maxFarmBurstSeconds do
-      task.wait(0.5)
-    end
-    pcall(farm.stop)
-    return
+  -- one-time remote setup (your farm expects this)
+  if not farmSetupDone and type(farm.setupAutoAttackRemote) == "function" then
+    pcall(farm.setupAutoAttackRemote)
+    farmSetupDone = true
   end
 
-  -- Fallback: run() once inside spawn; cap time
-  if type(farm.run) == "function" then
-    local finished = false
-    task.spawn(function()
-      local okRun, errRun = pcall(farm.run)
-      if not okRun then
-        note("Sahur", "farm.run error: " .. tostring(errRun), 6)
-      end
-      finished = true
-    end)
-    while running and not finished and (os.clock() - t0) < M.maxFarmBurstSeconds do
-      task.wait(0.5)
-    end
-    return
+  -- ensure Sahur is the selected target so farm aims at it
+  if type(farm.setSelected) == "function" and M.sahurModelName then
+    pcall(function() farm.setSelected({ M.sahurModelName }) end)
   end
 
-  if not warnedNoFarm then
-    warnedNoFarm = true
-    note("Sahur", "farm module has no start()/run(); nothing to do.", 4)
+  local deadline = os.clock() + (M.maxFarmBurstSeconds or 60)
+  local function keepRunning()
+    return running and os.clock() < deadline
+  end
+
+  local ok, err = pcall(function()
+    -- signature: farm.runAutoFarm(shouldContinueFn, setCurrentTargetFn?)
+    farm.runAutoFarm(keepRunning, nil)
+  end)
+  if not ok then
+    note("Sahur", "farm.runAutoFarm error: " .. tostring(err), 6)
   end
 end
 
-local function doHop(reason: string?)
+local function doHop(reason)
   if not serverHopper or type(serverHopper.hopToDifferentServer) ~= "function" then
     note("Sahur", "server_hopper module missing or invalid.", 5)
     return
