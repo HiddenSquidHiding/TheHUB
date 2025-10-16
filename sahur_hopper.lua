@@ -215,30 +215,49 @@ end
 
 -- Ensure lobby is clean AND Sahur exists before farming.
 local function ensureReadyLobby()
-  for attempt = 1, (M.maxCleanLobbyAttempts or 8) do
-    -- allow player list to populate after a join/hop
-    task.wait(M.settleAfterHopSeconds or 2)
+  local attempts = M.maxCleanLobbyAttempts or 8
+  local settle   = M.settleAfterHopSeconds or 2.0
 
+  for attempt = 1, attempts do
+    -- give the new server a moment to populate players/workspace
+    task.wait(settle)
+
+    -- 1) ✅ level check first
     local bad, offenders = lobbyHasHighLevel(M.levelThreshold)
     if bad then
       local parts = {}
       for _, o in ipairs(offenders) do
         table.insert(parts, o.name .. " (Lv " .. tostring(o.level) .. ")")
       end
-      note("Sahur", "High-level present: " .. table.concat(parts, ", "), 4)
+      note("Sahur", "High-level present: " .. table.concat(parts, ", ") .. " → hopping", 4)
       doHop("high-level in lobby")
+      -- loop continues; we'll re-check after the hop
     else
+      -- 2) ✅ model presence check (with a tiny retry window)
       local target = findSahur()
       if not target then
-        note("Sahur", "No Sahur model found in this server; hopping...", 3)
-        doHop("Sahur missing")
+        -- Sometimes the model spawns a second after join; retry briefly before hopping.
+        local spawned = false
+        local deadline = os.clock() + 3.0  -- retry window
+        while os.clock() < deadline and not spawned do
+          task.wait(0.25)
+          target = findSahur()
+          spawned = target ~= nil
+        end
+        if not spawned then
+          note("Sahur", "No Sahur model found; hopping...", 3)
+          doHop("Sahur missing")
+          -- loop continues; re-check after hop
+        else
+          return true -- clean lobby AND model is present
+        end
       else
-        -- clean lobby + sahur present = ready
-        return true
+        return true -- clean lobby AND model is present
       end
     end
   end
-  note("Sahur", "Could not find a clean Sahur lobby after multiple tries.", 5)
+
+  note("Sahur", "Could not find a clean, spawned Sahur server after multiple tries.", 5)
   return false
 end
 
