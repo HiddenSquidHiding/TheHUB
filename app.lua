@@ -282,13 +282,19 @@ function App.start()
       end
     end)(),
 
-    onSahurToggle = function(state)
-      if state then
-        sahur.enable()
-      else
-        sahur.disable()
-      end
-    end,
+onSahurToggle = function(state)
+  if not sahurHopper then
+    note("Sahur", "sahur_hopper module missing or failed to load", 5)
+    return
+  end
+
+  if state then
+    sahurHopper.enable()
+  else
+    sahurHopper.disable()
+  end
+end,
+
 
     -- (optional) Dungeon hooks
     onDungeonAutoToggle = (profile.ui.dungeonAuto and function(v)
