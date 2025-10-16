@@ -1,12 +1,12 @@
 -- sahur_hopper.lua
 -- Farm Sahur and hop automatically using server_hopper.hopToDifferentServer()
--- Adds boss-death detection: hop right after Sahur dies.
+-- Hops when lobby is bad, when Sahur dies, or when Sahur isn't found.
 
 local Players = game:GetService("Players")
 local RS      = game:GetService("ReplicatedStorage")
 local LocalPlayer = Players.LocalPlayer
 
--- -------- robust require (same as app.lua) ----------
+-- ---------- robust require (same as app.lua) ----------
 local function r(name)
   local hook = rawget(_G, "__WOODZ_REQUIRE")
   if type(hook) == "function" then
@@ -26,7 +26,7 @@ local function r(name)
   end
   return nil
 end
--- ----------------------------------------------------
+-- ------------------------------------------------------
 
 local function note(title, text, dur)
   if _G and _G.__WOODZ_UTILS and type(_G.__WOODZ_UTILS.notify) == "function" then
@@ -47,9 +47,6 @@ M.recheckInterval      = 3
 M.postHopCooldown      = 6
 M.maxFarmBurstSeconds  = 120     -- allow enough time for a kill
 M.sahurModelName       = "Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Sarur"
-
--- Optional: override to find Sahur more reliably (return the Model)
--- function M.sahurFinder() return workspace:FindFirstChild("...") end
 -- ===================================================
 
 -- Find player level (adjust if your game stores differently)
@@ -140,57 +137,6 @@ local running = false
 local warnedNoFarm = false
 local farmSetupDone = false
 
-local function safeFarmBurstAndWatch()
-  -- No farm? skip; we'll still hop if watcher sees kill
-  if not farm or type(farm.runAutoFarm) ~= "function" then
-    if not warnedNoFarm then
-      warnedNoFarm = true
-      note("Sahur", "farm.runAutoFarm not found; skipping farm step.", 4)
-    end
-  end
-
-  -- Set Sahur selection so the farm aims correctly
-  if type(farm) == "table" and type(farm.setSelected) == "function" and M.sahurModelName then
-    pcall(function() farm.setSelected({ M.sahurModelName }) end)
-  end
-
-  -- one-time remote setup
-  if not farmSetupDone and type(farm) == "table" and type(farm.setupAutoAttackRemote) == "function" then
-    pcall(farm.setupAutoAttackRemote)
-    farmSetupDone = true
-  end
-
-  local hopRequested = false
-  -- Start watcher waiting for Sahur to die or vanish
-  local watcher = task.spawn(function()
-    local ok, why = waitForSahurDeath(M.maxFarmBurstSeconds or 60)
-    if ok then
-      hopRequested = true
-      note("Sahur", "Boss " .. tostring(why) .. "; hopping...", 3)
-    end
-  end)
-
-  -- Run the farm burst in parallel (if present)
-  local deadline = os.clock() + (M.maxFarmBurstSeconds or 60)
-  if farm and type(farm.runAutoFarm) == "function" then
-    local function shouldContinue()
-      return running and not hopRequested and os.clock() < deadline
-    end
-    pcall(function() farm.runAutoFarm(shouldContinue, nil) end)
-  else
-    -- No farm loop: just idle while watcher waits
-    while running and not hopRequested and os.clock() < deadline do
-      task.wait(0.25)
-    end
-  end
-
-  -- If watcher asked for hop, do it now
-  if hopRequested then
-    return true
-  end
-  return false
-end
-
 local function doHop(reason)
   if not serverHopper or type(serverHopper.hopToDifferentServer) ~= "function" then
     note("Sahur", "server_hopper module missing or invalid.", 5)
@@ -205,9 +151,62 @@ local function doHop(reason)
   task.wait(M.postHopCooldown)
 end
 
+-- Run a burst of farming and watch Sahur; return true if we should hop
+local function safeFarmBurstAndWatch()
+  -- ✅ NEW: if no Sahur model is present, hop right away
+  local target = findSahur()
+  if not target then
+    note("Sahur", "No Sahur model found; hopping...", 3)
+    return true
+  end
+
+  -- Ensure Sahur is selected so farm aims at it
+  if type(farm) == "table" and type(farm.setSelected) == "function" and M.sahurModelName then
+    pcall(function() farm.setSelected({ M.sahurModelName }) end)
+  end
+
+  -- one-time remote setup
+  if not farmSetupDone and type(farm) == "table" and type(farm.setupAutoAttackRemote) == "function" then
+    pcall(farm.setupAutoAttackRemote)
+    farmSetupDone = true
+  end
+
+  -- If farm module missing, just watch for death/timeout
+  local hopRequested = false
+  local watcher = task.spawn(function()
+    local ok, why = waitForSahurDeath(M.maxFarmBurstSeconds or 60)
+    if ok then
+      hopRequested = true
+      note("Sahur", "Boss " .. tostring(why) .. "; hopping...", 3)
+    end
+  end)
+
+  local deadline = os.clock() + (M.maxFarmBurstSeconds or 60)
+  if farm and type(farm.runAutoFarm) == "function" then
+    local function shouldContinue()
+      return running and not hopRequested and os.clock() < deadline
+    end
+    local ok, err = pcall(function() farm.runAutoFarm(shouldContinue, nil) end)
+    if not ok and not warnedNoFarm then
+      warnedNoFarm = true
+      note("Sahur", "farm.runAutoFarm error: " .. tostring(err), 6)
+    end
+  else
+    if not warnedNoFarm then
+      warnedNoFarm = true
+      note("Sahur", "farm.runAutoFarm not found; watching only.", 4)
+    end
+    while running and not hopRequested and os.clock() < deadline do
+      task.wait(0.25)
+    end
+  end
+
+  return hopRequested
+end
+
 local function loop()
   while running do
-    -- If lobby is bad, hop immediately
+    -- Hop immediately if lobby is bad
     local bad, why = M.isBadLobby()
     if bad then
       doHop(why)
@@ -215,10 +214,10 @@ local function loop()
       continue
     end
 
-    -- Otherwise, farm & watch boss; hop when dead
+    -- Farm & watch; hop on death or if Sahur missing
     local shouldHop = safeFarmBurstAndWatch()
     if shouldHop then
-      doHop("Sahur killed")
+      doHop("Sahur killed or missing")
     end
 
     task.wait(M.recheckInterval)
