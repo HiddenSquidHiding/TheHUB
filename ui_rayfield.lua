@@ -29,6 +29,7 @@ function M.build(h)
 
   local Main    = Window:CreateTab("Main")
   local Options = Window:CreateTab("Options")
+  local Extra = Window:CreateTab("Extra")
 
   ------------------------------------------------------------------
   -- Targets section (Search + Multi-select + Clear All)
@@ -164,6 +165,22 @@ function M.build(h)
   end
   if h.onDungeonReplayToggle then
     Options:CreateToggle({ Name="Dungeon Auto-Replay", CurrentValue=false, Callback=function(v) h.onDungeonReplayToggle(v) end })
+  end
+
+  ------------------------------------------------------------------
+  -- Extra
+  ------------------------------------------------------------------
+  Extra:CreateSection("General")
+
+  if h.onSahurToggle then
+    local tog = Extra:CreateToggle({
+      Name = "Auto Sahur (Auto-Hop)",
+      CurrentValue = false,
+      Flag = "AutoSahur",
+      Callback = function(enabled)
+        if h and h.onSahurToggle then
+      h.onSahurToggle(enabled)
+    end
   end
 
   -- exposed helpers
