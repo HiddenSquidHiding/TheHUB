@@ -39,6 +39,10 @@ return {
     "Pkin Kin Kin Kin Kin Kun",
     "Halloween2",
     "Drulimero Drulichina Boss",
+    "Draculero Dracula Boss",
+    "Draculero Crate",
+    "Drulimero Crate",
+    
   },
 
   forcedMonsters = {
