@@ -42,6 +42,8 @@ return {
     "Draculero Dracula Boss",
     "Draculero Crate",
     "Drulimero Crate",
+    "Los Alessios",
+    "LosAlessios",
   },
 
   forcedMonsters = {
