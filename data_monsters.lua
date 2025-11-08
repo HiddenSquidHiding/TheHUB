@@ -42,7 +42,7 @@ return {
     "Draculero Dracula Boss",
     "Draculero Crate",
     "Drulimero Crate",
-    "Los Pkinkinkitos",
+    "Los Pkinkinkinkinkun",
     "Los Alessios",
     "LosAlessios",
     "Tri Ton Ton Sahur",
