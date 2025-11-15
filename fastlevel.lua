@@ -9,7 +9,7 @@ function M.isEnabled() return M._enabled end
 
 -- Convenience: the exact Sahur target the farm should lock to in this mode
 function M.getTargetLabel()
-  return "Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Sarur"
+  return "Ferro Ferro Ferro Ferro Ferro Ferro Ferro Ferro Ferro Ferro Ferro Ferro Ferro Ferro Ferro Sahur"
 end
 
 return M
