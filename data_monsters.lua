@@ -1,17 +1,18 @@
 -- data_monsters.lua
 return {
   toSahurModels = {
-    "Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Sarur",
-    "Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Sarur",
-    "Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Sarur",
-    "Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Sarur",
-    "Tri Tri Tri Tri Tri Tri Tri Tri Tri Tri Sarur",
-    "Tri Tri Tri Tri Tri Tri Tri Tri Tri Sarur",
-    "Tri Tri Tri Tri Tri Tri Tri Tri Sarur",
-    "Tri Tri Tri Tri Tri Tri Tri Sarur",
-    "Tri Tri Tri Tri Tri Tri Sarur",
-    "Tri Tri Tri Tri Tri Sarur",
-    "Tri Tri Tri Sarur",
+    "Ferro Ferro Ferro Ferro Sahur",
+    "Ferro Ferro Ferro Ferro Ferro Sahur",
+    "Ferro Ferro Ferro Ferro Ferro Ferro Sahur",
+    "Ferro Ferro Ferro Ferro Ferro Ferro Ferro Sahur",
+    "Ferro Ferro Ferro Ferro Ferro Ferro Ferro FerroSahur",
+    "Ferro Ferro Ferro Ferro Ferro Ferro Ferro Ferro Ferro Sahur",
+    "Ferro Ferro Ferro Ferro Ferro Ferro Ferro Ferro Ferro Ferro Sahur",
+    "Ferro Ferro Ferro Ferro Ferro Ferro Ferro Ferro Ferro Ferro Ferro Sahur",
+    "Ferro Ferro Ferro Ferro Ferro Ferro Ferro Ferro Ferro Ferro Ferro Ferro Sahur",
+    "Ferro Ferro Ferro Ferro Ferro Ferro Ferro Ferro Ferro Ferro Ferro Ferro Ferro Sahur",
+    "Ferro Ferro Ferro Ferro Ferro Ferro Ferro Ferro Ferro Ferro Ferro Ferro Ferro Ferro Sahur",
+    "Ferro Ferro Ferro Ferro Ferro Ferro Ferro Ferro Ferro Ferro Ferro Ferro Ferro Ferro Ferro Sahur",
   },
 
   weatherEventModels = {
@@ -46,6 +47,7 @@ return {
     "Los Alessios",
     "LosAlessios",
     "Tri Ton Ton Sahur",
+    "Leaf Leaf Leaf Sahur",
   },
 
   forcedMonsters = {
