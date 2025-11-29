@@ -44,5 +44,6 @@ return {
     "Trippi Troppi Troppa Trippa Boss2","Blueberrinni Octossini Boss",
     "Blueberrinni Crate","Los CrocodiIIitos","Crocodillitos Crate","Pipi Kiwi Boss",
     "Ferro Ferro Ferro Ferro Ferro Ferro Ferro Ferro Ferro Ferro Ferro Ferro Ferro Ferro Ferro Sahur",
+    "Pulu Pulu Pulu Pulpen Boss",
   },
 }
