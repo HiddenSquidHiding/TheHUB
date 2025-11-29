@@ -13,6 +13,8 @@ return {
     "ChuckaChu Crate",
     "Leaf Sahur Crate",
     "Chicken Crate",
+    "Pulu Pulu Pulu Pulpen Boss",
+    "Pulpen Crate",
   },
 
   forcedMonsters = {
