@@ -33,7 +33,7 @@ local function buildRemotePath(serviceName)
         "Services",      -- 3
         serviceName,     -- 4 – passed in
         "RF",            -- 5
-        "MerchantBuy"    -- 6
+        "MerchentBuy"    -- 6
     }
 end
 
