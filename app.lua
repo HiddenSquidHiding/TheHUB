@@ -168,7 +168,7 @@ function App.start()
       local on = (v ~= nil) and v or false
       if merchants and merchants.autoBuyLoop and on then
         task.spawn(function()
-          merchants.autoBuyLoop("SmelterMerchantService1", function()
+          merchants.autoBuyLoop("SmelterMerchantService", function()
             return on
           end, function() end)
         end)
