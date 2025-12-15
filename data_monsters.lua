@@ -15,6 +15,7 @@ return {
     "Chicken Crate",
     "Pulu Pulu Pulu Pulpen Boss",
     "Pulpen Crate",
+    "Spaghetti Tualetti Boss",
   },
 
   forcedMonsters = {
