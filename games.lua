@@ -16,10 +16,10 @@ return {
     name = "Brainrot Evolution",
     ui = {
       modelPicker=true, currentTarget=true,
-      autoFarm=true, smartFarm=true,
+      autoFarm=true, smartFarm=false,
       merchants=true, crates=true, antiAFK=true,
-      redeemCodes=true, fastlevel=true, privateServer=true,
-      sahurHopper = true,
+      redeemCodes=true, fastlevel=false, privateServer=false,
+      sahurHopper = false,
       dungeonAuto=false, dungeonReplay=false,
     },
   },
