@@ -16,6 +16,11 @@ return {
     "Pulu Pulu Pulu Pulpen Boss",
     "Pulpen Crate",
     "Spaghetti Tualetti Boss",
+    "Giftinini Mananini Boss",
+    "Gift Crate",
+    "Stantanitos Crate",
+    "Snowman Crate",
+    "Gingerbread Crate",
   },
 
   forcedMonsters = {
