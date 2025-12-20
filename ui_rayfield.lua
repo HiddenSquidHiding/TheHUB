@@ -298,6 +298,16 @@ function M.build(h)
       if h.onSahurToggle then pcall(function() h.onSahurToggle(true) end) end
     end
 
+
+
+     -- Auto-Farm
+    if getFlagBool("Auto-Farm") then
+      if M.setAutoFarm then pcall(function() M.setAutoFarm(true) end) end
+      if h.onAutoFarmToggle then pcall(function() h.onAutoFarmToggle(true) end) end
+    end
+
+
+    
     -- Dungeon Auto-Attack
     if getFlagBool("DungeonAuto") then
       if M.setDungeonAuto then pcall(function() M.setDungeonAuto(true) end) end
