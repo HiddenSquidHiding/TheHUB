@@ -1,7 +1,7 @@
 -- data_monsters.lua
 return {
   toSahurModels = {
-    "Ferro Ferro Ferro Ferro Ferro Ferro Ferro Ferro Ferro Ferro Ferro Ferro Ferro Ferro Ferro Sahur",
+    "Ferro Ferro Ferro Ferro Ferro Ferro Ferro Ferro Ferro Ferro Ferro Ferro Ferro Ferro Ferrro Sahur"
   },
 
   weatherEventModels = {
